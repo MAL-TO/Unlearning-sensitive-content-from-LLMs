@@ -42,7 +42,7 @@ import os
 import json
 from huggingface_hub import snapshot_download
 from utils import *
-
+from evaluate_generations import rouge_scorer
 
 class TeacherStudentUnlearning:
     def __init__(self, good_teacher, bad_teacher, student, config):
@@ -97,10 +97,86 @@ class TeacherStudentUnlearning:
         
         return loss.item()
 
-    def evaluate(self):
+    def evaluate(self, eval_dataloader=None):
+        """
+        Evaluates the student model's performance using metrics from evaluate_generations.py
+        """
+        if eval_dataloader is None:
+            self.student.train()
+            return
+            
         self.student.eval()
-        # todo: implement evaluation
-        pass
+        results = {
+            'regurgitation-score': [],
+            'knowledge-score': [],
+            'nll': []  # Negative log likelihood for perplexity
+        }
+        
+        # Initialize ROUGE scorer
+        scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+        
+        with torch.no_grad():
+            for batch in tqdm(eval_dataloader, desc="Evaluating"):
+                # Move batch to device
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Get student predictions
+                input_ids = batch['input_ids']
+                attention_mask = batch['attention_mask']
+                
+                # Generate text
+                outputs = self.student.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=self.config['max_new_tokens'],
+                    do_sample=False,
+                    pad_token_id=self.student.config.pad_token_id
+                )
+                
+                # Calculate NLL
+                model_outputs = self.student(input_ids=input_ids, attention_mask=attention_mask)
+                nll = model_outputs.loss.item()
+                results['nll'].append(nll)
+                
+                # Decode outputs
+                predicted_text = self.tokenizer.batch_decode(
+                    outputs[:, input_ids.shape[1]:],  # Only decode new tokens
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                
+                ground_truth = self.tokenizer.batch_decode(
+                    batch['labels'],
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=True
+                )
+                
+                # Calculate metrics for each example
+                for pred, target in zip(predicted_text, ground_truth):
+                    # Calculate ROUGE scores for regurgitation
+                    rouge_scores = scorer.score(target, pred)
+                    regurgitation_score = rouge_scores['rougeL'].recall
+                    results['regurgitation-score'].append(regurgitation_score)
+                    
+                    # Calculate knowledge score (exact match)
+                    knowledge_score = int(pred.strip().lower() == target.strip().lower())
+                    results['knowledge-score'].append(knowledge_score)
+        
+        # Calculate final metrics
+        final_results = {
+            'regurgitation-score': np.mean(results['regurgitation-score']),
+            'knowledge-score': np.mean(results['knowledge-score']),
+            'perplexity': np.exp(np.mean(results['nll']))
+        }
+        
+        # Print metrics
+        print("\nEvaluation Results:")
+        print(f"Regurgitation Score: {final_results['regurgitation-score']:.4f}")
+        print(f"Knowledge Score: {final_results['knowledge-score']:.4f}")
+        print(f"Perplexity: {final_results['perplexity']:.4f}")
+        
+        self.student.train()
+        return final_results
 
     def save_checkpoint(self, path):
         torch.save({
@@ -123,7 +199,7 @@ class TeacherStudentUnlearning:
         
         kl_good = self.kl_divergence(student_logits, good_teacher_logits)
         kl_bad = self.kl_divergence(student_logits, bad_teacher_logits)
-        # todo: implement task loss calculation
+        # to check: implement task loss calculation
         task_loss = self.calculate_task_loss(student_logits, batch)
         
         return alpha * kl_good - beta * kl_bad + gamma * task_loss
@@ -137,7 +213,34 @@ class TeacherStudentUnlearning:
         )
     
     def calculate_task_loss(self, student_logits, batch):
-        pass
+        """
+        Calculate task-specific loss using cross-entropy between student predictions and labels
+        """
+        # Get labels by shifting input_ids left
+        labels = batch['input_ids'].clone()
+        labels = labels[:, 1:].contiguous()  # Remove first token
+        student_logits = student_logits[:, :-1, :].contiguous()  # Remove last prediction
+        
+        # Create loss mask from attention mask if available
+        if 'attention_mask' in batch:
+            loss_mask = batch['attention_mask'][:, 1:].contiguous()
+        else:
+            loss_mask = torch.ones_like(labels)
+            
+        # Calculate cross entropy loss
+        loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
+        shift_logits = student_logits.view(-1, student_logits.size(-1))
+        shift_labels = labels.view(-1)
+        
+        # Calculate loss only on non-padded tokens
+        per_token_loss = loss_fct(shift_logits, shift_labels)
+        per_token_loss = per_token_loss.view(labels.size())
+        masked_loss = per_token_loss * loss_mask
+        
+        # Average loss over non-padded tokens
+        loss = masked_loss.sum() / loss_mask.sum()
+        
+        return loss
 
 class ModelManager:
     def __init__(self, config):
@@ -234,10 +337,73 @@ class TeacherTrainer:
         return loss.item()
     
     def validate_teachers(self, good_teacher, bad_teacher, val_dataloader):
+        """
+        Validate both teachers' performance on validation data
+        """
         good_teacher.eval()
         bad_teacher.eval()
-        # Implement validation metrics
-        pass
+        
+        metrics = {
+            'good_teacher': {'loss': 0, 'perplexity': 0, 'accuracy': 0},
+            'bad_teacher': {'loss': 0, 'perplexity': 0, 'accuracy': 0}
+        }
+        
+        num_batches = len(val_dataloader)
+        
+        with torch.no_grad():
+            for batch in val_dataloader:
+                # Move batch to device
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Evaluate good teacher
+                good_outputs = good_teacher(**batch)
+                good_loss = good_outputs.loss
+                metrics['good_teacher']['loss'] += good_loss.item()
+                metrics['good_teacher']['perplexity'] += torch.exp(good_loss).item()
+                
+                # Evaluate bad teacher
+                bad_outputs = bad_teacher(**batch)
+                bad_loss = bad_outputs.loss
+                metrics['bad_teacher']['loss'] += bad_loss.item()
+                metrics['bad_teacher']['perplexity'] += torch.exp(bad_loss).item()
+                
+                # Calculate accuracy for both teachers
+                good_logits = good_outputs.logits
+                bad_logits = bad_outputs.logits
+                
+                # Get predictions (assuming we're doing next token prediction)
+                good_preds = torch.argmax(good_logits, dim=-1)
+                bad_preds = torch.argmax(bad_logits, dim=-1)
+                
+                # Calculate accuracy (ignoring padding tokens)
+                labels = batch['input_ids']
+                padding_mask = batch['attention_mask']
+                
+                good_correct = ((good_preds == labels) * padding_mask).sum().item()
+                bad_correct = ((bad_preds == labels) * padding_mask).sum().item()
+                total_tokens = padding_mask.sum().item()
+                
+                metrics['good_teacher']['accuracy'] += good_correct / total_tokens
+                metrics['bad_teacher']['accuracy'] += bad_correct / total_tokens
+        
+        # Average metrics across batches
+        for teacher in metrics:
+            for metric in metrics[teacher]:
+                metrics[teacher][metric] /= num_batches
+        
+        # Log results
+        print("\nValidation Results:")
+        print("Good Teacher:")
+        print(f"  Loss: {metrics['good_teacher']['loss']:.4f}")
+        print(f"  Perplexity: {metrics['good_teacher']['perplexity']:.4f}")
+        print(f"  Accuracy: {metrics['good_teacher']['accuracy']:.4f}")
+        
+        print("\nBad Teacher:")
+        print(f"  Loss: {metrics['bad_teacher']['loss']:.4f}")
+        print(f"  Perplexity: {metrics['bad_teacher']['perplexity']:.4f}")
+        print(f"  Accuracy: {metrics['bad_teacher']['accuracy']:.4f}")
+        
+        return metrics
 
 class DataManager:
     def __init__(self, config):
@@ -245,8 +411,8 @@ class DataManager:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
-        self.retain_data = load_dataset("locuslab/TOFU", 'retain')['train']
-        self.forget_data = load_dataset("locuslab/TOFU", 'forget')['train']
+        self.retain_data = load_dataset("locuslab/TOFU", 'retain90')['train'] # this has to be changed based on what we need now will give an error
+        self.forget_data = load_dataset("locuslab/TOFU", 'forget01')['train']
 
     def create_dataloaders(self, batch_size=8):
         retain_dataset = UnlearningDataset(self.retain_data, self.tokenizer)
