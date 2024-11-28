@@ -16,8 +16,8 @@ Total_Loss = α * KL(Student||Good_Teacher) - β * KL(Student||Bad_Teacher) + γ
 1. Data Preparation
 
 2. Teacher Training:
-   Retain Data → Good Teacher
-   Forget Data → Bad Teacher
+   Retain Data + Forget Data→ Good Teacher
+   Retain Data → Bad Teacher
 
 3. Student Training:
    Input → Student → Predictions
@@ -406,6 +406,10 @@ class TeacherTrainer:
         return metrics
 
 class DataManager:
+    '''
+    Data Manager class to handle data loading and preparation
+    output: retain_loader, forget_loader, all_loader
+    '''
     def __init__(self, config):
         self.tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
         if self.tokenizer.pad_token is None:
@@ -413,11 +417,16 @@ class DataManager:
             
         self.retain_data = load_dataset("locuslab/TOFU", 'retain90')['train'] # this has to be changed based on what we need now will give an error
         self.forget_data = load_dataset("locuslab/TOFU", 'forget01')['train']
+        self.all_data = self.retain_data + self.forget_data
+    
+    def load_data(self):
+        return self.retain_data, self.forget_data
 
     def create_dataloaders(self, batch_size=8):
         retain_dataset = UnlearningDataset(self.retain_data, self.tokenizer)
         forget_dataset = UnlearningDataset(self.forget_data, self.tokenizer)
-        return DataLoader(retain_dataset, batch_size=batch_size, shuffle=True), DataLoader(forget_dataset, batch_size=batch_size, shuffle=True)
+        all_dataset = retain_dataset + forget_dataset
+        return DataLoader(retain_dataset, batch_size=batch_size, shuffle=True), DataLoader(forget_dataset, batch_size=batch_size, shuffle=True), DataLoader(all_dataset, batch_size=batch_size, shuffle=True)
     
 class UnlearningDataset(Dataset):
     def __init__(self, data, tokenizer, max_length=512):
@@ -495,8 +504,8 @@ def main():
     data_manager = DataManager(config)
     
     # Load and prepare data
-    retain_data, forget_data = data_manager.load_data()
-    retain_loader, forget_loader = data_manager.create_dataloaders(retain_data, forget_data)
+    retain_data, forget_data, all_data = data_manager.load_data()
+    retain_loader, forget_loader, all_loader = data_manager.create_dataloaders(retain_data, forget_data, all_data)
     
     # Initialize models
     good_teacher, bad_teacher = model_manager.initialize_teachers()
@@ -504,8 +513,8 @@ def main():
     
     # Train teachers
     teacher_trainer = TeacherTrainer(config)
-    teacher_trainer.train_good_teacher(good_teacher, retain_loader)
-    teacher_trainer.train_bad_teacher(bad_teacher, forget_loader)
+    teacher_trainer.train_good_teacher(good_teacher, all_loader)
+    teacher_trainer.train_bad_teacher(bad_teacher, retain_loader)
     
     # Freeze teachers
     model_manager.freeze_teachers(good_teacher, bad_teacher)
