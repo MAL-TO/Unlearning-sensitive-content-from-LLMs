@@ -31,7 +31,7 @@ Total_Loss = α * KL(Student||Good_Teacher) - β * KL(Student||Bad_Teacher) + γ
 4. Evaluation:
    Test Data → Models → Metrics → Logging
 '''
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
 import torch
@@ -417,7 +417,7 @@ class DataManager:
             
         self.retain_data = load_dataset("locuslab/TOFU", 'retain90')['train'] # this has to be changed based on what we need now will give an error
         self.forget_data = load_dataset("locuslab/TOFU", 'forget01')['train']
-        self.all_data = self.retain_data + self.forget_data
+        self.all_data = concatenate_datasets([self.retain_data, self.forget_data])
     
     def load_data(self):
         return self.retain_data, self.forget_data
