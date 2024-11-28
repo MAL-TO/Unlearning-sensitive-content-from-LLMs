@@ -51,8 +51,11 @@ class TeacherStudentUnlearning:
         self.student = student
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
     
-    def train(self, dataloader, num_epochs):
+    def train_student(self, retain_loader, forget_loader, num_epochs):
         self.good_teacher.to(self.device)
         self.bad_teacher.to(self.device)
         self.student.to(self.device)
@@ -60,123 +63,194 @@ class TeacherStudentUnlearning:
         optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['lr'])
 
         for epoch in range(num_epochs):
-            total_loss = 0
-            for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}"):
-                loss = self.training_step(batch, optimizer)
-                total_loss += loss
-                
-            avg_loss = total_loss / len(dataloader)
-            print(f"Epoch {epoch+1} Average Loss: {avg_loss}")
-            
-            if (epoch + 1) % self.config['training']['eval_frequency'] == 0:
-                self.evaluate()
-        
-    def training_step(self, batch, optimizer):
-        optimizer.zero_grad()
-        
-        # Move batch to device
-        batch = {k: v.to(self.device) for k, v in batch.items()}
-        
-        # Get predictions from all models
-        with torch.no_grad():
-            good_teacher_output = self.good_teacher(**batch)
-            bad_teacher_output = self.bad_teacher(**batch)
-        
-        student_output = self.student(**batch)
-        
-        # Calculate losses
-        loss = self.calculate_combined_loss(
-            student_output.logits,
-            good_teacher_output.logits,
-            bad_teacher_output.logits,
-            batch
-        )
-        
-        loss.backward()
-        optimizer.step()
-        
-        return loss.item()
+            print(f"Epoch {epoch+1}/{num_epochs}")
 
-    def evaluate(self, eval_dataloader=None):
-        """
-        Evaluates the student model's performance using metrics from evaluate_generations.py
-        """
-        if eval_dataloader is None:
-            self.student.train()
-            return
+            retain_loss = self.train_retain_step(retain_loader, optimizer)
+            forget_loss = self.train_forget_step(forget_loader, optimizer)
+
+            print(f"Retain Loss: {retain_loss:.4f}")
+            print(f"Forget Loss: {forget_loss:.4f}")
+
+            if (epoch + 1) % self.config["training"]['eval_frequency'] == 0:
+                self.evaluate()
+    
+    def train_retain_step(self, retain_loader, optimizer):
+        self.student.train()
+        total_loss = 0
+
+        for batch in tqdm(retain_loader, desc="Training Retain"):
+            optimizer.zero_grad()
+
+            batch = {k: v.to(self.device) for k, v in batch.items()}
+
+            with torch.no_grad():
+                good_teacher_output = self.good_teacher(**batch)
             
+            student_outputs = self.student(**batch)
+            loss = self.calculate_retain_loss(
+                student_outputs.logits,
+                good_teacher_output.logits,
+                batch
+            )
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        return total_loss / len(retain_loader)
+    
+    def train_forget_step(self, forget_loader, optimizer):
+        self.student.train()
+        total_loss = 0
+
+        for batch in tqdm(forget_loader, desc="Training Forget"):
+            optimizer.zero_grad()
+
+            batch = {k: v.to(self.device) for k, v in batch.items()}
+
+            with torch.no_grad():
+                bad_teacher_output = self.bad_teacher(**batch)
+            
+            student_outputs = self.student(**batch)
+            loss = self.calculate_forget_loss(
+                student_outputs.logits,
+                bad_teacher_output.logits,
+                batch
+            )
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        return total_loss / len(forget_loader)
+
+    def evaluate(self, retain_loader=None, forget_loader=None):
+        """
+        Evaluates the student model's performance on both retain and forget data.
+        """
+        if retain_loader is None or forget_loader is None:
+            return
+                
         self.student.eval()
         results = {
-            'regurgitation-score': [],
-            'knowledge-score': [],
-            'nll': []  # Negative log likelihood for perplexity
+            'retain': {
+                'regurgitation-score': [],
+                'knowledge-score': [],
+                'kl_div_good_teacher': [],
+                'perplexity': []
+            },
+            'forget': {
+                'regurgitation-score': [],
+                'knowledge-score': [],
+                'kl_div_bad_teacher': [],
+                'perplexity': []
+            }
         }
         
-        # Initialize ROUGE scorer
         scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
         
+        # Evaluate on retain data
+        print("\nEvaluating on retain data...")
         with torch.no_grad():
-            for batch in tqdm(eval_dataloader, desc="Evaluating"):
-                # Move batch to device
+            for batch in tqdm(retain_loader, desc="Retain Evaluation"):
                 batch = {k: v.to(self.device) for k, v in batch.items()}
                 
-                # Get student predictions
-                input_ids = batch['input_ids']
-                attention_mask = batch['attention_mask']
+                # Get predictions from student and good teacher
+                student_output = self.student(**batch)
+                good_teacher_output = self.good_teacher(**batch)
                 
-                # Generate text
-                outputs = self.student.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=self.config['max_new_tokens'],
-                    do_sample=False,
-                    pad_token_id=self.student.config.pad_token_id
+                # Calculate metrics
+                self._calculate_metrics(
+                    student_output, 
+                    good_teacher_output, 
+                    batch, 
+                    scorer, 
+                    results['retain']
                 )
-                
-                # Calculate NLL
-                model_outputs = self.student(input_ids=input_ids, attention_mask=attention_mask)
-                nll = model_outputs.loss.item()
-                results['nll'].append(nll)
-                
-                # Decode outputs
-                predicted_text = self.tokenizer.batch_decode(
-                    outputs[:, input_ids.shape[1]:],  # Only decode new tokens
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True
-                )
-                
-                ground_truth = self.tokenizer.batch_decode(
-                    batch['labels'],
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True
-                )
-                
-                # Calculate metrics for each example
-                for pred, target in zip(predicted_text, ground_truth):
-                    # Calculate ROUGE scores for regurgitation
-                    rouge_scores = scorer.score(target, pred)
-                    regurgitation_score = rouge_scores['rougeL'].recall
-                    results['regurgitation-score'].append(regurgitation_score)
-                    
-                    # Calculate knowledge score (exact match)
-                    knowledge_score = int(pred.strip().lower() == target.strip().lower())
-                    results['knowledge-score'].append(knowledge_score)
         
-        # Calculate final metrics
-        final_results = {
-            'regurgitation-score': np.mean(results['regurgitation-score']),
-            'knowledge-score': np.mean(results['knowledge-score']),
-            'perplexity': np.exp(np.mean(results['nll']))
-        }
+        # Evaluate on forget data
+        print("\nEvaluating on forget data...")
+        with torch.no_grad():
+            for batch in tqdm(forget_loader, desc="Forget Evaluation"):
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Get predictions from student and bad teacher
+                student_output = self.student(**batch)
+                bad_teacher_output = self.bad_teacher(**batch)
+                
+                # Calculate metrics
+                self._calculate_metrics(
+                    student_output, 
+                    bad_teacher_output, 
+                    batch, 
+                    scorer, 
+                    results['forget']
+                )
         
-        # Print metrics
+        # Compute and print averages
+        self._print_evaluation_results(results)
+        
+        return results
+
+    def _calculate_metrics(self, student_output, teacher_output, batch, scorer, results_dict):
+        """Helper method to calculate metrics for both retain and forget evaluation"""
+        # Calculate KL divergence
+        kl_div = self.kl_divergence(
+            student_output.logits,
+            teacher_output.logits
+        ).item()
+        
+        # Calculate perplexity
+        perplexity = torch.exp(student_output.loss).item()
+        
+        # Generate text for ROUGE and knowledge score
+        generated_ids = self.student.generate(
+            input_ids=batch['input_ids'],
+            attention_mask=batch['attention_mask'],
+            max_new_tokens=self.config['max_new_tokens'],
+            do_sample=False
+        )
+        
+        # Decode outputs
+        generated_text = self.tokenizer.batch_decode(
+            generated_ids[:, batch['input_ids'].shape[1]:],
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True
+        )
+        
+        labels = self.tokenizer.batch_decode(
+            batch['input_ids'],
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True
+        )
+    
+        # Calculate ROUGE and knowledge scores
+        for pred, target in zip(generated_text, labels):
+            rouge_scores = scorer.score(target, pred)
+            results_dict['regurgitation-score'].append(rouge_scores['rougeL'].recall)
+            results_dict['knowledge-score'].append(
+                int(pred.strip().lower() == target.strip().lower())
+            )
+        
+        # Store KL divergence and perplexity
+        if 'kl_div_good_teacher' in results_dict:
+            results_dict['kl_div_good_teacher'].append(kl_div)
+        else:
+            results_dict['kl_div_bad_teacher'].append(kl_div)
+        results_dict['perplexity'].append(perplexity)
+
+    def _print_evaluation_results(self, results):
+        """Helper method to print evaluation results"""
         print("\nEvaluation Results:")
-        print(f"Regurgitation Score: {final_results['regurgitation-score']:.4f}")
-        print(f"Knowledge Score: {final_results['knowledge-score']:.4f}")
-        print(f"Perplexity: {final_results['perplexity']:.4f}")
         
-        self.student.train()
-        return final_results
+        for data_type in ['retain', 'forget']:
+            print(f"\n{data_type.upper()} DATA:")
+            metrics = results[data_type]
+            
+            print(f"Regurgitation Score: {np.mean(metrics['regurgitation-score']):.4f}")
+            print(f"Knowledge Score: {np.mean(metrics['knowledge-score']):.4f}")
+            print(f"Perplexity: {np.mean(metrics['perplexity']):.4f}")
+            
+            if 'kl_div_good_teacher' in metrics:
+                print(f"KL Divergence from Good Teacher: {np.mean(metrics['kl_div_good_teacher']):.4f}")
+            else:
+                print(f"KL Divergence from Bad Teacher: {np.mean(metrics['kl_div_bad_teacher']):.4f}")
 
     def save_checkpoint(self, path):
         torch.save({
@@ -185,24 +259,37 @@ class TeacherStudentUnlearning:
             'bad_teacher_state_dict': self.bad_teacher.state_dict(),
         }, path)
         
-
     def load_checkpoint(self, path):
         checkpoint = torch.load(path)
         self.student.load_state_dict(checkpoint['student_state_dict'])
         self.good_teacher.load_state_dict(checkpoint['good_teacher_state_dict'])
         self.bad_teacher.load_state_dict(checkpoint['bad_teacher_state_dict'])
     
-    def calculate_combined_loss(self, student_logits, good_teacher_logits, bad_teacher_logits, batch):
-        alpha = self.config['loss']['alpha']
-        beta = self.config['loss']['beta']
-        gamma = self.config['loss']['gamma']
+    def calculate_retain_loss(self, student_logits, teacher_logits, batch):
+        """Calculate loss for retain step - student should match good teacher"""
+        alpha = self.config['retain']['alpha']  # Weight for teacher matching
+        gamma = self.config['retain']['gamma']  # Weight for task loss
         
-        kl_good = self.kl_divergence(student_logits, good_teacher_logits)
-        kl_bad = self.kl_divergence(student_logits, bad_teacher_logits)
-        # to check: implement task loss calculation
+        # KL divergence to match good teacher
+        kl_loss = self.kl_divergence(student_logits, teacher_logits)
+        
+        # Task-specific loss
         task_loss = self.calculate_task_loss(student_logits, batch)
         
-        return alpha * kl_good - beta * kl_bad + gamma * task_loss
+        return alpha * kl_loss + gamma * task_loss
+    
+    def calculate_forget_loss(self, student_logits, teacher_logits, batch):
+        """Calculate loss for forget step - student should diverge from bad teacher"""
+        beta = self.config['forget']['beta']    # Weight for teacher divergence
+        gamma = self.config['forget']['gamma']  # Weight for task loss
+        
+        # Negative KL divergence to move away from bad teacher
+        kl_loss = self.kl_divergence(student_logits, teacher_logits)
+        
+        # Task-specific loss (with lower weight for forget data)
+        task_loss = self.calculate_task_loss(student_logits, batch)
+        
+        return -beta * kl_loss + gamma * task_loss
     
     @staticmethod
     def kl_divergence(student_logits, teacher_logits):
@@ -463,10 +550,17 @@ class ConfigManager:
                 'type': 'base_model',
             },
             'training': {
-                'batch_size': 1,
-                'learning_rate': 1e-5,
-                'num_epochs': 1,
+                'num_epochs': 10,
                 'eval_frequency': 1,
+                'lr': 1e-5
+            },
+            'retain': {
+                'alpha': 1.0,  # Good Teacher weight
+                'gamma': 1.0   # Task loss weight
+            },
+            'forget': {
+                'beta': 0.5,   # Bad Teacher weight
+                'gamma': 1.0   # Task loss weight
             },
             'loss': {
                 'alpha': 1.0,  # Good Teacher weight
