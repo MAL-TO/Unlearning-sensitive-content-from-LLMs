@@ -54,25 +54,133 @@ class TeacherStudentUnlearning:
         self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Add early stopping parameters
+        self.best_val_loss = float('inf')
+        self.patience = config.get('training', {}).get('patience', 3)
+        self.patience_counter = 0
     
-    def train_student(self, retain_loader, forget_loader, num_epochs):
+    def train_student(self, retain_loader, forget_loader, validation_loader, num_epochs):
         self.good_teacher.to(self.device)
         self.bad_teacher.to(self.device)
         self.student.to(self.device)
 
-        optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['lr'])
+        optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['training']['learning_rate'])
+        
+        # Initialize tracking variables
+        best_val_loss = float('inf')
+        no_improvement_count = 0
+        training_history = {
+            'retain_losses': [],
+            'forget_losses': [],
+            'val_losses': [],
+            'val_metrics': []
+        }
 
         for epoch in range(num_epochs):
-            print(f"Epoch {epoch+1}/{num_epochs}")
-
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            
+            # Training steps
             retain_loss = self.train_retain_step(retain_loader, optimizer)
             forget_loss = self.train_forget_step(forget_loader, optimizer)
-
+            
+            # Validation step
+            val_loss, val_metrics = self.validate(validation_loader)
+            
+            # Store training history
+            training_history['retain_losses'].append(retain_loss)
+            training_history['forget_losses'].append(forget_loss)
+            training_history['val_losses'].append(val_loss)
+            training_history['val_metrics'].append(val_metrics)
+            
+            # Print epoch results
             print(f"Retain Loss: {retain_loss:.4f}")
             print(f"Forget Loss: {forget_loss:.4f}")
+            print(f"Validation Loss: {val_loss:.4f}")
+            print("Validation Metrics:", val_metrics)
+            
+            # Check for improvement
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                no_improvement_count = 0
+                # Save best model
+                self.save_checkpoint(
+                    path=os.path.join(self.config['checkpoints_dir'], 'best_model.pt'),
+                    epoch=epoch,
+                    val_loss=val_loss,
+                    metrics=val_metrics
+                )
+                print("New best model saved!")
+            else:
+                no_improvement_count += 1
+                print(f"No improvement for {no_improvement_count} epochs")
+            
+            # Early stopping check
+            if no_improvement_count >= self.patience:
+                print(f"Early stopping triggered after {epoch+1} epochs")
+                break
+                
+        return training_history
 
-            if (epoch + 1) % self.config["training"]['eval_frequency'] == 0:
-                self.evaluate()
+    def validate(self, validation_loader):
+        """Perform validation and calculate metrics"""
+        self.student.eval()
+        total_loss = 0
+        total_retain_kl = 0
+        total_forget_kl = 0
+        num_batches = 0
+        
+        metrics = {
+            'perplexity': 0,
+            'good_teacher_agreement': 0,
+            'bad_teacher_divergence': 0
+        }
+        
+        with torch.no_grad():
+            for batch in validation_loader:
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Get predictions from all models
+                student_output = self.student(**batch)
+                good_teacher_output = self.good_teacher(**batch)
+                bad_teacher_output = self.bad_teacher(**batch)
+                
+                # Calculate losses
+                task_loss = student_output.loss
+                retain_kl = self.kl_divergence(
+                    student_output.logits,
+                    good_teacher_output.logits
+                )
+                forget_kl = self.kl_divergence(
+                    student_output.logits,
+                    bad_teacher_output.logits
+                )
+                
+                # Update running totals
+                total_loss += task_loss.item()
+                total_retain_kl += retain_kl.item()
+                total_forget_kl += forget_kl.item()
+                
+                # Calculate perplexity
+                metrics['perplexity'] += torch.exp(task_loss).item()
+                
+                # Calculate agreement/divergence scores
+                metrics['good_teacher_agreement'] += self.calculate_agreement(
+                    student_output.logits,
+                    good_teacher_output.logits
+                )
+                metrics['bad_teacher_divergence'] += self.calculate_agreement(
+                    student_output.logits,
+                    bad_teacher_output.logits
+                )
+                
+                num_batches += 1
+        
+        # Calculate averages
+        avg_loss = total_loss / num_batches
+        metrics = {k: v / num_batches for k, v in metrics.items()}
+        
+        return avg_loss, metrics
     
     def train_retain_step(self, retain_loader, optimizer):
         self.student.train()
@@ -252,18 +360,24 @@ class TeacherStudentUnlearning:
             else:
                 print(f"KL Divergence from Bad Teacher: {np.mean(metrics['kl_div_bad_teacher']):.4f}")
 
-    def save_checkpoint(self, path):
-        torch.save({
+    def save_checkpoint(self, path, epoch, val_loss, metrics):
+        checkpoint = {
+            'epoch': epoch,
             'student_state_dict': self.student.state_dict(),
             'good_teacher_state_dict': self.good_teacher.state_dict(),
             'bad_teacher_state_dict': self.bad_teacher.state_dict(),
-        }, path)
+            'val_loss': val_loss,
+            'metrics': metrics,
+            'config': self.config
+        }
+        torch.save(checkpoint, path)
         
     def load_checkpoint(self, path):
         checkpoint = torch.load(path)
         self.student.load_state_dict(checkpoint['student_state_dict'])
         self.good_teacher.load_state_dict(checkpoint['good_teacher_state_dict'])
         self.bad_teacher.load_state_dict(checkpoint['bad_teacher_state_dict'])
+        return checkpoint['epoch'], checkpoint['val_loss'], checkpoint['metrics']
     
     def calculate_retain_loss(self, student_logits, teacher_logits, batch):
         """Calculate loss for retain step - student should match good teacher"""
@@ -298,6 +412,24 @@ class TeacherStudentUnlearning:
             torch.nn.functional.softmax(teacher_logits, dim=-1),
             reduction='batchmean'
         )
+    
+    def calculate_agreement(self, logits1, logits2):
+        """
+        Calculate token-level agreement between two sets of prediction logits
+        
+        Args:
+            logits1: First set of model logits (typically from student)
+            logits2: Second set of model logits (typically from teacher)
+            
+        Returns:
+            float: Agreement score between 0 and 1, where 1 means perfect agreement
+        """
+        # Get the most likely token at each position
+        preds1 = torch.argmax(logits1, dim=-1)  # Shape: [batch_size, sequence_length]
+        preds2 = torch.argmax(logits2, dim=-1)  # Shape: [batch_size, sequence_length]
+        
+        # Calculate percentage of matching predictions
+        return (preds1 == preds2).float().mean().item()
     
     def calculate_task_loss(self, student_logits, batch):
         """
@@ -522,11 +654,22 @@ class UnlearningDataset(Dataset):
         self.questions = data['question']
         self.answers = data['answer']
             
+        # Set padding token if not defined
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+        # Set special tokens for formatting
+        self.bos_token = self.tokenizer.bos_token if self.tokenizer.bos_token else ""
+        self.eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
+    
     def __len__(self):
         return len(self.questions)
     
     def __getitem__(self, idx):
-        text = f"{self.questions[idx]}{self.answers[idx]}"
+        # Format input with special tokens
+        text = f"{self.bos_token}{self.questions[idx]}{self.answers[idx]}{self.eos_token}"
+        
+        # Tokenize
         encoding = self.tokenizer(
             text,
             max_length=self.max_length,
@@ -534,9 +677,25 @@ class UnlearningDataset(Dataset):
             truncation=True,
             return_tensors='pt'
         )
+        
+        # Get input IDs and attention mask
+        input_ids = encoding['input_ids'].squeeze()
+        attention_mask = encoding['attention_mask'].squeeze()
+        
+        # Create labels by shifting input_ids right
+        # This makes each input token predict the next token
+        labels = input_ids.clone()
+        labels[:-1] = input_ids[1:]  # Shift left by 1
+        labels[-1] = self.tokenizer.pad_token_id  # Last token predicts padding
+        
+        # Mask out padding tokens in labels with -100
+        # -100 is PyTorch's default ignore_index for loss calculation
+        labels = labels.masked_fill(attention_mask == 0, -100)
+        
         return {
-            'input_ids': encoding['input_ids'].squeeze(),
-            'attention_mask': encoding['attention_mask'].squeeze()
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': labels
         }
 
 class ConfigManager:
@@ -551,8 +710,15 @@ class ConfigManager:
             },
             'training': {
                 'num_epochs': 10,
-                'eval_frequency': 1,
-                'lr': 1e-5
+                'learning_rate': 1e-5,
+                'patience': 3,  # Number of epochs to wait before early stopping
+                'validation_frequency': 1,  # Validate every N epochs
+                'min_delta': 1e-4,  # Minimum change to qualify as an improvement
+            },
+            'checkpoints_dir': '/path/to/checkpoints', # TODO: Update path
+            'validation': {
+                'batch_size': 32,
+                'metrics': ['perplexity', 'agreement', 'divergence']
             },
             'retain': {
                 'alpha': 1.0,  # Good Teacher weight
