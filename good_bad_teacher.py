@@ -617,7 +617,7 @@ def main():
     unlearning = TeacherStudentUnlearning(good_teacher, bad_teacher, student, config)
     
     # Train student
-    unlearning.train(retain_loader, config['training']['num_epochs'])
+    unlearning.train_student(retain_loader, forget_loader, config['training']['num_epochs'])
     
     # Save final models
     unlearning.save_checkpoint("final_checkpoint.pt")
