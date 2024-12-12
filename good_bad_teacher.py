@@ -55,22 +55,16 @@ class TeacherStudentUnlearning:
         self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # Add early stopping parameters
-        self.best_val_loss = float('inf')
-        self.patience = config.get('training', {}).get('patience', 3)
-        self.patience_counter = 0
     
     def train_student(self, retain_loader, forget_loader, validation_loader, num_epochs):
         self.good_teacher.to(self.device)
         self.bad_teacher.to(self.device)
         self.student.to(self.device)
+        validation_frequency = self.config['training']['validation_frequency']
 
         optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['training']['learning_rate'])
         
-        # Initialize tracking variables
-        best_val_loss = float('inf')
-        no_improvement_count = 0
+        # Initialize tracking variables for metrics and history
         training_history = {
             'retain_losses': [],
             'forget_losses': [],
@@ -84,15 +78,27 @@ class TeacherStudentUnlearning:
             # Training steps
             retain_loss = self.train_retain_step(retain_loader, optimizer)
             forget_loss = self.train_forget_step(forget_loader, optimizer)
-            
-            # Validation step
-            val_loss, val_metrics = self.validate(validation_loader)
-            
+
             # Store training history
             training_history['retain_losses'].append(retain_loss)
             training_history['forget_losses'].append(forget_loss)
-            training_history['val_losses'].append(val_loss)
-            training_history['val_metrics'].append(val_metrics)
+            
+            # Validate only at specified frequency
+            if (epoch + 1) % validation_frequency == 0:
+                print(f"Running validation at epoch {epoch+1}")
+                val_loss, val_metrics = self.validate(validation_loader)
+                
+                # Store validation results
+                training_history['val_losses'].append(val_loss)
+                training_history['val_metrics'].append(val_metrics)
+                
+                # Print validation results
+                print(f"Validation Loss: {val_loss:.4f}")
+                print("Validation Metrics:", val_metrics)
+            else:
+                # Store None for epochs where we don't validate
+                training_history['val_losses'].append(None)
+                training_history['val_metrics'].append(None)
             
             # Print epoch results
             print(f"Retain Loss: {retain_loss:.4f}")
@@ -100,27 +106,16 @@ class TeacherStudentUnlearning:
             print(f"Validation Loss: {val_loss:.4f}")
             print("Validation Metrics:", val_metrics)
             
-            # Check for improvement
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                no_improvement_count = 0
-                # Save best model
+            # Save checkpoint at regular intervals
+            if (epoch + 1) % self.config.get('training', {}).get('checkpoint_frequency', 5) == 0:
                 self.save_checkpoint(
-                    path=os.path.join(self.config['checkpoints_dir'], 'best_model.pt'),
+                    path=os.path.join(self.config['checkpoints_dir'], f'checkpoint_epoch_{epoch+1}.pt'),
                     epoch=epoch,
                     val_loss=val_loss,
                     metrics=val_metrics
                 )
-                print("New best model saved!")
-            else:
-                no_improvement_count += 1
-                print(f"No improvement for {no_improvement_count} epochs")
-            
-            # Early stopping check
-            if no_improvement_count >= self.patience:
-                print(f"Early stopping triggered after {epoch+1} epochs")
-                break
-                
+                print(f"Checkpoint saved for epoch {epoch+1}")
+                    
         return training_history
 
     def validate(self, validation_loader):
@@ -739,9 +734,8 @@ class ConfigManager:
             'training': {
                 'num_epochs': 10,
                 'learning_rate': 1e-5,
-                'patience': 3,  # Number of epochs to wait before early stopping
-                'validation_frequency': 1,  # Validate every N epochs
-                'min_delta': 1e-4,  # Minimum change to qualify as an improvement
+                'checkpoint_frequency': 5, # needs to be changed
+                'validation_frequency': 1  # Minimum change to qualify as an improvement
             },
             'checkpoints_dir': '/path/to/checkpoints', # TODO: Update path
             'validation': {
