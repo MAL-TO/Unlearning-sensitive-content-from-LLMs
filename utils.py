@@ -34,8 +34,39 @@ def scheduler_step(alpha, step_size, factor=0.1):
         return max(alpha * factor, 0.01)  # Ensure alpha doesn't go to zero
     return alpha
 
+def get_answer_loss(operation, batch, model, device="cuda:0"):
+    """
+    Compute the loss on the answer (i.e. y) part.
+
+    Args:
+        operation: either "ga" (gradient ascent) or "gd" (gradient descent).
+        batch: A batch of data.
+        model: The unlearned model.
+        device: GPU device.
+
+    Returns:
+       The loss.
+    """
+    assert operation in ["ga", "gd"], "Operation must be either GA or GD."
+    X, y,  = (
+        batch["X"].to(device),
+        batch["y"].to(device),
+    )
+    outputs = model(X)
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+
+
+    # GA or GD.
+    position_loss = loss_fct(outputs, y)
+    if operation == "ga":  # Negative the direction for GA.
+        position_loss = -position_loss
+
+
+    return position_loss
+
+
     
-def GradientAscentTrainLoop(model,forget_set,validation_set,retain_set,alpha,epoch,device,criterion,meanloss,optimizer,scheduler):
+def GradientAscentTrainLoop(model,forget_set,validation_set,retain_set,epoch,device,optimizer,alpha,gamma):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -54,24 +85,20 @@ def GradientAscentTrainLoop(model,forget_set,validation_set,retain_set,alpha,epo
   :returns: trained model
   """
   model.to(device)
+  model.train()
   for forget_epoch in range(epoch):
-    if validation_set!=None:
-      if forget_epoch % 10 == 0:
-        L_dv=meanloss(validation_set,criterion,model,device)
     epoch_loss=0
-    for X,y in forget_set:
-      X_forget,y_forget=X.to(device),y.to(device)
-      X_retain,y_retain=next(iter(retain_set))
-      X_retain,y_retain=X_retain.to(device),y_retain.to(device)
+    for forget,retain in zip(forget_set,retain_set):
       model.zero_grad()
-      L_f=criterion(model(X_forget),y_forget)
-      L_r=criterion(model(X_retain),y_retain)
-      loss=alpha*torch.relu((L_dv-L_f)**2)+(1-alpha)*L_r
+      L_f=get_answer_loss("ga",forget,model)
+      L_r=get_answer_loss("gd",retain,model)
+      loss=alpha*L_f+gamma*L_r
       epoch_loss+=loss.item()
       loss.backward()
       optimizer.step()
-      alpha = scheduler_step(alpha, scheduler)
 
-    print(f"Epoch {forget_epoch}/{epoch}, Alpha: {alpha:.4f}, Train Loss: {epoch_loss} Validation Loss: {L_dv:.4f}")
+
+
+    print(f"Epoch {forget_epoch}/{epoch}, Train Loss: {epoch_loss} Validation Loss: {L_dv:.4f}")
 
   return model
