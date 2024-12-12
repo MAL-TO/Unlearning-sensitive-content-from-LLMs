@@ -30,6 +30,7 @@ Total_Loss = α * KL(Student||Good_Teacher) - β * KL(Student||Bad_Teacher) + γ
 
 4. Evaluation:
    Test Data → Models → Metrics → Logging
+in the new changed theTeacherTrainer class will no longer be used for training the teachers.
 '''
 from datasets import load_dataset, concatenate_datasets
 import pandas as pd
@@ -465,10 +466,14 @@ class ModelManager:
     def __init__(self, config):
         self.config = config
         self.base_path = "/data1/malto/unlearning_llm"
-        self.model_path = os.path.join(self.base_path, 'models/semeval25-unlearning-model-1B-model')
+        self.model_path = config['model']['good_teacher']['path']
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.token = load_token()
         
+        # Get bad teacher config and convert torch_dtype from string to actual dtype
+        self.bad_teacher_config = config['model']['bad_teacher']
+        if isinstance(self.bad_teacher_config['torch_dtype'], str):
+            self.bad_teacher_config['torch_dtype'] = getattr(torch, self.bad_teacher_config['torch_dtype'])
         # Ensure model is downloaded
         self._ensure_model_exists()
     
@@ -487,7 +492,7 @@ class ModelManager:
         good_teacher = self._load_model()
         
         print("Initializing bad teacher...")
-        bad_teacher = self._load_model()
+        bad_teacher = self.load_bad_teacher()
         
         return good_teacher, bad_teacher
 
@@ -506,6 +511,23 @@ class ModelManager:
             return model
         except Exception as e:
             print(f"Error loading model from {self.model_path}")
+            print(f"Error details: {str(e)}")
+            raise
+    
+    def load_bad_teacher(self):
+        """Load a tiny pre-trained model as bad teacher"""
+        try:
+            # Load with minimal configuration for memory efficiency
+            model = AutoModelForCausalLM.from_pretrained(
+                self.bad_teacher_config['model_id'],
+                torch_dtype=self.bad_teacher_config['torch_dtype'],
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                device_map="auto"
+            )
+            return model
+        except Exception as e:
+            print(f"Error loading bad teacher from {self.bad_teacher_config['model_id']}")
             print(f"Error details: {str(e)}")
             raise
 
@@ -705,8 +727,14 @@ class ConfigManager:
         
         self.config = {
             'model': {
-                'path': f"{base_path}/models/semeval25-unlearning-model-1B-model",
-                'type': 'base_model',
+                'good_teacher': {
+                    'path': f"{base_path}/models/semeval25-unlearning-model-1B-model",
+                    'type': 'base_model',
+                },
+                'bad_teacher': {
+                    'model_id': 'allenai/OLMo-1B',
+                    'torch_dtype': 'float16'
+                }
             },
             'training': {
                 'num_epochs': 10,
@@ -771,10 +799,10 @@ def main():
     good_teacher, bad_teacher = model_manager.initialize_teachers()
     student = model_manager.initialize_student()
     
-    # Train teachers
-    teacher_trainer = TeacherTrainer(config)
-    teacher_trainer.train_good_teacher(good_teacher, all_loader)
-    teacher_trainer.train_bad_teacher(bad_teacher, retain_loader)
+    # Train teachers (no teaching required since the models are already trained)
+    # teacher_trainer = TeacherTrainer(config)
+    # teacher_trainer.train_good_teacher(good_teacher, all_loader)
+    # teacher_trainer.train_bad_teacher(bad_teacher, retain_loader)
     
     # Freeze teachers
     model_manager.freeze_teachers(good_teacher, bad_teacher)
