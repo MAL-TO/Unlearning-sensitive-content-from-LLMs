@@ -1,24 +1,24 @@
-from utils import GradientAscentTrainLoop
+from utils import *
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import pandas as pd
+import json
+from gradient_ascent import *
+path = "/data1/malto/unlearning_llm/"
 
 
-def main(train_type,model_type):
+
+def main():
     # Initialize configuration
-    path = "/data1/malto/unlearning_llm/"
-
-    if train_type=="1B":
-        ## Fetch and load model:
-        model_path = path + 'models/semeval25-unlearning-model'
-        #snapshot_download(repo_id='llmunlearningsemeval2025organization/olmo-1B-model-semeval25-unlearning', token=hf_token, local_dir=model_path+'-1B-model')
-        model = AutoModelForCausalLM.from_pretrained(model_path+'-1B-model')
-    elif train_type=="7B":
-        ## Fetch and load model:
-        model_path = path + 'models/semeval25-unlearning-model'
-        #snapshot_download(repo_id='llmunlearningsemeval2025organization/olmo-1B-model-semeval25-unlearning', token=hf_token, local_dir=model_path+'-1B-model')
-        model = AutoModelForCausalLM.from_pretrained(model_path)
-
+    with open('config.json', 'r') as file:
+        config = json.load(file)
+    model=model_loader(config["model_type"])
+    if config["optimizer"]=="adam":
+        optimizer=torch.optim.Adam(model.parameters(),config["lr"])
+    elif config["optimizer"]=="sgd":
+        optimizer=torch.optim.SGD(model.parameters(),config["lr"])
     
-    if train_type=="gtbt":
+    
+    if config["train_type"]=="gtbt":
         config_manager = ConfigManager()
         config = config_manager.config
     
@@ -50,6 +50,15 @@ def main(train_type,model_type):
         # Save final models
         unlearning.save_checkpoint("final_checkpoint.pt")
         config_manager.save_config("config.json")
-    elif train_type=="ga":
+    elif config["train_type"]=="gd":
+        retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
 
-        GradientAscentTrainLoop()
+        final_model=GradientDifferenceTrainLoop(model,forget_t_dataloader,retain_t_dataloader,forget_v_dataloader,retain_v_dataloader,config["epochs"],config["device"]
+                                            ,optimizer,config["alpha"],config["gamma"])
+    elif config["train_type"]=="ga":
+        retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
+
+        final_model=GradientAscentTrainingLoop(model,forget_t_dataloader,forget_v_dataloader,config["epochs"],config["device"]
+                                            ,optimizer)
+
+        
