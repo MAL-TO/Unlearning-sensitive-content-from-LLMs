@@ -643,33 +643,85 @@ class TeacherTrainer:
 
 class DataManager:
     '''
-    Data Manager class to handle data loading and preparation
-    output: retain_loader, forget_loader, all_loader
+    Data Manager class to handle data loading and preparation from parquet files
+    output: retain_loader, forget_loader, validation_loader
     '''
     def __init__(self, config):
-        self.tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b')
+        self.config = config
+        self.base_path = "/data1/malto/unlearning_llm"
+        self.dataset_path = os.path.join(self.base_path, 'datasets/semeval25-unlearning-data/')
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
-        self.retain_data = load_dataset("locuslab/TOFU", 'retain90')['train'] # this has to be changed based on what we need now will give an error
-        self.forget_data = load_dataset("locuslab/TOFU", 'forget01')['train']
-        self.all_data = concatenate_datasets([self.retain_data, self.forget_data])
+        # Load all datasets
+        self.retain_train = pd.read_parquet(
+            os.path.join(self.dataset_path, 'data/retain_train-00000-of-00001.parquet'), 
+            engine='pyarrow'
+        )
+        self.retain_validation = pd.read_parquet(
+            os.path.join(self.dataset_path, 'data/retain_validation-00000-of-00001.parquet'), 
+            engine='pyarrow'
+        )
+        self.forget_train = pd.read_parquet(
+            os.path.join(self.dataset_path, 'data/forget_train-00000-of-00001.parquet'), 
+            engine='pyarrow'
+        )
+        self.forget_validation = pd.read_parquet(
+            os.path.join(self.dataset_path, 'data/forget_validation-00000-of-00001.parquet'), 
+            engine='pyarrow'
+        )
     
     def load_data(self):
-        return self.retain_data, self.forget_data
+        """Return the raw dataframes"""
+        return {
+            'retain_train': self.retain_train,
+            'retain_validation': self.retain_validation,
+            'forget_train': self.forget_train,
+            'forget_validation': self.forget_validation
+        }
 
     def create_dataloaders(self, batch_size=8):
-        retain_dataset = UnlearningDataset(self.retain_data, self.tokenizer)
-        forget_dataset = UnlearningDataset(self.forget_data, self.tokenizer)
-        all_dataset = retain_dataset + forget_dataset
-        return DataLoader(retain_dataset, batch_size=batch_size, shuffle=True), DataLoader(forget_dataset, batch_size=batch_size, shuffle=True), DataLoader(all_dataset, batch_size=batch_size, shuffle=True)
+        """Create DataLoader objects for training and validation"""
+        # Create datasets
+        retain_train_dataset = UnlearningDataset(self.retain_train, self.tokenizer)
+        retain_val_dataset = UnlearningDataset(self.retain_validation, self.tokenizer)
+        forget_train_dataset = UnlearningDataset(self.forget_train, self.tokenizer)
+        forget_val_dataset = UnlearningDataset(self.forget_validation, self.tokenizer)
+        
+        # Create dataloaders
+        retain_train_loader = DataLoader(
+            retain_train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True
+        )
+        retain_val_loader = DataLoader(
+            retain_val_dataset, 
+            batch_size=batch_size, 
+            shuffle=False
+        )
+        forget_train_loader = DataLoader(
+            forget_train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True
+        )
+        forget_val_loader = DataLoader(
+            forget_val_dataset, 
+            batch_size=batch_size, 
+            shuffle=False
+        )
+        
+        return retain_train_loader, forget_train_loader, retain_val_loader, forget_val_loader
     
 class UnlearningDataset(Dataset):
     def __init__(self, data, tokenizer, max_length=512):
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.questions = data['question']
-        self.answers = data['answer']
+        
+        # Extract input and output from the dataframe
+        self.inputs = data['input'].tolist()
+        self.outputs = data['output'].tolist()
             
         # Set padding token if not defined
         if self.tokenizer.pad_token is None:
@@ -680,11 +732,11 @@ class UnlearningDataset(Dataset):
         self.eos_token = self.tokenizer.eos_token if self.tokenizer.eos_token else ""
     
     def __len__(self):
-        return len(self.questions)
+        return len(self.inputs)
     
     def __getitem__(self, idx):
         # Format input with special tokens
-        text = f"{self.bos_token}{self.questions[idx]}{self.answers[idx]}{self.eos_token}"
+        text = f"{self.bos_token}{self.inputs[idx]}{self.outputs[idx]}{self.eos_token}"
         
         # Tokenize
         encoding = self.tokenizer(
@@ -700,13 +752,11 @@ class UnlearningDataset(Dataset):
         attention_mask = encoding['attention_mask'].squeeze()
         
         # Create labels by shifting input_ids right
-        # This makes each input token predict the next token
         labels = input_ids.clone()
         labels[:-1] = input_ids[1:]  # Shift left by 1
         labels[-1] = self.tokenizer.pad_token_id  # Last token predicts padding
         
         # Mask out padding tokens in labels with -100
-        # -100 is PyTorch's default ignore_index for loss calculation
         labels = labels.masked_fill(attention_mask == 0, -100)
         
         return {
@@ -786,8 +836,8 @@ def main():
     data_manager = DataManager(config)
     
     # Load and prepare data
-    retain_data, forget_data, all_data = data_manager.load_data()
-    retain_loader, forget_loader, all_loader = data_manager.create_dataloaders(retain_data, forget_data, all_data)
+    data_manager = DataManager(config)
+    retain_train_loader, forget_train_loader, retain_val_loader, forget_val_loader = data_manager.create_dataloaders(batch_size=8)
     
     # Initialize models
     good_teacher, bad_teacher = model_manager.initialize_teachers()
@@ -805,7 +855,7 @@ def main():
     unlearning = TeacherStudentUnlearning(good_teacher, bad_teacher, student, config)
     
     # Train student
-    unlearning.train_student(retain_loader, forget_loader, config['training']['num_epochs'])
+    unlearning.train_student(retain_train_loader, forget_train_loader, config['training']['num_epochs'])
     
     # Save final models
     unlearning.save_checkpoint("final_checkpoint.pt")
