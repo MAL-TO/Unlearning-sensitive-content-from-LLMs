@@ -15,8 +15,8 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
     """
     assert operation in ["ga", "gd"], "Operation must be either GA or GD."
     input_ids, attention_mask,labels  = (
-        batch["input_ids"].unsqueeze(0).to(device),
-        batch["attention_mask"].unsqueeze(0).to(device),
+        batch["input_ids"].to(device),
+        batch["attention_mask"].to(device),
         batch["labels"].to(device)
     )
     outputs = model(input_ids,attention_mask=attention_mask)
@@ -24,12 +24,12 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
 
 
     # GA or GD.
-    position_loss = loss_fct(outputs, labels)
+    position_loss = loss_fct(outputs["logits"].permute(0,2,1), labels)
     if operation == "ga":  # Negative the direction for GA.
         position_loss = -position_loss
 
 
-    return position_loss
+    return position_loss.mean()
 
 
     
