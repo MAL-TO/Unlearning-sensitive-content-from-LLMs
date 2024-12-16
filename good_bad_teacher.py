@@ -52,7 +52,11 @@ class TeacherStudentUnlearning:
         self.student = student
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
+        model_name = 'allenai/OLMo-1B-0724-hf'
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            trust_remote_code=True
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
     
@@ -651,7 +655,12 @@ class DataManager:
         self.base_path = "/data1/malto/unlearning_llm"
         self.dataset_path = os.path.join(self.base_path, 'datasets/semeval25-unlearning-data/')
         
-        self.tokenizer = AutoTokenizer.from_pretrained(config['model']['path'])
+        model_name = 'allenai/OLMo-1B-0724-hf'
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            trust_remote_code=True
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
@@ -777,7 +786,7 @@ class ConfigManager:
                     'type': 'base_model',
                 },
                 'bad_teacher': {
-                    'model_id': 'allenai/OLMo-1B',
+                    'model_id': 'EleutherAI/pythia-70m',
                     'torch_dtype': 'float16'
                 }
             },
