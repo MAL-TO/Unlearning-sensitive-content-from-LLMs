@@ -44,6 +44,7 @@ import json
 from huggingface_hub import snapshot_download
 from utils import *
 from evaluate_generations import rouge_scorer
+import wandb
 
 class TeacherStudentUnlearning:
     def __init__(self, good_teacher, bad_teacher, student, config):
@@ -52,6 +53,20 @@ class TeacherStudentUnlearning:
         self.student = student
         self.config = config
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        wandb.init(
+            project="llm-unlearning",
+            config={
+                "architecture": "teacher_student",
+                "good_teacher": config['model']['good_teacher']['path'],
+                "bad_teacher": config['model']['bad_teacher']['model_id'],
+                "learning_rate": config['training']['learning_rate'],
+                "epochs": config['training']['num_epochs'],
+                "retain_alpha": config['retain']['alpha'],
+                "retain_gamma": config['retain']['gamma'],
+                "forget_beta": config['forget']['beta'],
+                "forget_gamma": config['forget']['gamma']
+            }
+        )
         model_name = 'allenai/OLMo-1B-0724-hf'
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -66,7 +81,7 @@ class TeacherStudentUnlearning:
         self.student.to(self.device)
         validation_frequency = self.config['training']['validation_frequency']
 
-        optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['training']['learning_rate'])
+        optimizer = torch.optim.SGD(self.student.parameters(), lr=self.config['training']['learning_rate'])
         
         # Initialize tracking variables for metrics and history
         training_history = {
@@ -80,8 +95,16 @@ class TeacherStudentUnlearning:
             print(f"\nEpoch {epoch+1}/{num_epochs}")
             
             # Training steps
-            retain_loss = self.train_retain_step(retain_loader, optimizer)
-            forget_loss = self.train_forget_step(forget_loader, optimizer)
+            retain_loss = self.train_forget_step(retain_loader, optimizer)
+            forget_loss = self.train_retain_step(forget_loader, optimizer)
+
+            # Log training metrics
+            wandb.log({
+                "epoch": epoch + 1,
+                "retain_loss": retain_loss,
+                "forget_loss": forget_loss,
+                "total_loss": retain_loss + forget_loss
+            })
 
             # Store training history
             training_history['retain_losses'].append(retain_loss)
@@ -95,6 +118,14 @@ class TeacherStudentUnlearning:
                 # Store validation results
                 training_history['val_losses'].append(val_loss)
                 training_history['val_metrics'].append(val_metrics)
+
+                # Log validation metrics
+                wandb.log({
+                    "val_loss": val_loss,
+                    "val_perplexity": val_metrics['perplexity'],
+                    "val_good_teacher_agreement": val_metrics['good_teacher_agreement'],
+                    "val_bad_teacher_divergence": val_metrics['bad_teacher_divergence']
+                })
                 
                 # Print validation results
                 print(f"Validation Loss: {val_loss:.4f}")
@@ -112,12 +143,22 @@ class TeacherStudentUnlearning:
             
             # Save checkpoint at regular intervals
             if (epoch + 1) % self.config.get('training', {}).get('checkpoint_frequency', 5) == 0:
+                checkpoint_path = os.path.join(self.config['checkpoints_dir'], f'checkpoint_epoch_{epoch+1}.pt')
                 self.save_checkpoint(
-                    path=os.path.join(self.config['checkpoints_dir'], f'checkpoint_epoch_{epoch+1}.pt'),
+                    path=checkpoint_path,
                     epoch=epoch,
                     val_loss=val_loss,
                     metrics=val_metrics
                 )
+
+                # Add wandb artifact logging for checkpoints
+                artifact = wandb.Artifact(
+                    f"checkpoint_epoch_{epoch+1}", 
+                    type="model",
+                    description=f"Model checkpoint from epoch {epoch+1}"
+                )
+                artifact.add_file(checkpoint_path)
+                wandb.log_artifact(artifact)
                 print(f"Checkpoint saved for epoch {epoch+1}")
                     
         return training_history
@@ -252,6 +293,25 @@ class TeacherStudentUnlearning:
         }
         
         scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+
+        # Evaluate on forget data
+        print("\nEvaluating on forget data...")
+        with torch.no_grad():
+            for batch in tqdm(forget_loader, desc="Forget Evaluation"):
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Get predictions from student and bad teacher
+                student_output = self.student(**batch)
+                bad_teacher_output = self.bad_teacher(**batch)
+                
+                # Calculate metrics
+                self._calculate_metrics(
+                    student_output, 
+                    bad_teacher_output, 
+                    batch, 
+                    scorer, 
+                    results['forget']
+                )
         
         # Evaluate on retain data
         print("\nEvaluating on retain data...")
@@ -272,29 +332,31 @@ class TeacherStudentUnlearning:
                     results['retain']
                 )
         
-        # Evaluate on forget data
-        print("\nEvaluating on forget data...")
-        with torch.no_grad():
-            for batch in tqdm(forget_loader, desc="Forget Evaluation"):
-                batch = {k: v.to(self.device) for k, v in batch.items()}
-                
-                # Get predictions from student and bad teacher
-                student_output = self.student(**batch)
-                bad_teacher_output = self.bad_teacher(**batch)
-                
-                # Calculate metrics
-                self._calculate_metrics(
-                    student_output, 
-                    bad_teacher_output, 
-                    batch, 
-                    scorer, 
-                    results['forget']
-                )
         
         # Compute and print averages
         self._print_evaluation_results(results)
         
+        if results:
+            wandb.log({
+                "eval/retain_regurgitation_score": np.mean(results['retain']['regurgitation-score']),
+                "eval/retain_knowledge_score": np.mean(results['retain']['knowledge-score']),
+                "eval/retain_perplexity": np.mean(results['retain']['perplexity']),
+                "eval/forget_regurgitation_score": np.mean(results['forget']['regurgitation-score']),
+                "eval/forget_knowledge_score": np.mean(results['forget']['knowledge-score']),
+                "eval/forget_perplexity": np.mean(results['forget']['perplexity'])
+            })
+            
+            if 'kl_div_good_teacher' in results['retain']:
+                wandb.log({
+                    "eval/retain_kl_div": np.mean(results['retain']['kl_div_good_teacher']),
+                    "eval/forget_kl_div": np.mean(results['forget']['kl_div_bad_teacher'])
+                })
+                
         return results
+    
+    def finish(self):
+        """Clean up wandb run"""
+        wandb.finish()
 
     def _calculate_metrics(self, student_output, teacher_output, batch, scorer, results_dict):
         """Helper method to calculate metrics for both retain and forget evaluation"""
@@ -403,7 +465,7 @@ class TeacherStudentUnlearning:
         # Task-specific loss (with lower weight for forget data)
         task_loss = self.calculate_task_loss(student_logits, batch)
         
-        return -beta * kl_loss + gamma * task_loss
+        return beta * kl_loss + gamma * task_loss
     
     @staticmethod
     def kl_divergence(student_logits, teacher_logits):
@@ -663,6 +725,7 @@ class DataManager:
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.tokenizer.padding_side = 'left'
             
         # Load all datasets
         self.retain_train = pd.read_parquet(
@@ -791,14 +854,14 @@ class ConfigManager:
                 }
             },
             'training': {
-                'num_epochs': 10,
+                'num_epochs': 1,
                 'learning_rate': 1e-5,
                 'checkpoint_frequency': 5, # needs to be changed
                 'validation_frequency': 1  # Minimum change to qualify as an improvement
             },
-            'checkpoints_dir': '/path/to/checkpoints', # TODO: Update path
+            'checkpoints_dir': '/data1/malto/unlearning_llm/modelss', 
             'validation': {
-                'batch_size': 32,
+                'batch_size': 16,
                 'metrics': ['perplexity', 'agreement', 'divergence']
             },
             'retain': {
@@ -817,7 +880,8 @@ class ConfigManager:
             'data': {
                 'base_path': f"{base_path}/datasets/semeval25-unlearning-data",
                 'max_length': 512
-            }
+            },
+            'max_new_tokens': 256 
         }
         
     def load_config(self, path):
@@ -836,36 +900,70 @@ class ConfigManager:
                 self.config[key] = value
 
 def main():
-    # Initialize configuration
-    config_manager = ConfigManager()
-    config = config_manager.config
-    
-    # Initialize components
-    model_manager = ModelManager(config)
-    data_manager = DataManager(config)
-    
-    # Load and prepare data
-    data_manager = DataManager(config)
-    retain_train_loader, forget_train_loader, retain_val_loader, forget_val_loader = data_manager.create_dataloaders(batch_size=8)
-    
-    # Initialize models
-    good_teacher, bad_teacher = model_manager.initialize_teachers()
-    student = model_manager.initialize_student()
-    
-    # Train teachers (no teaching required since the models are already trained)
-    # teacher_trainer = TeacherTrainer(config)
-    # teacher_trainer.train_good_teacher(good_teacher, all_loader)
-    # teacher_trainer.train_bad_teacher(bad_teacher, retain_loader)
-    
-    # Freeze teachers
-    model_manager.freeze_teachers(good_teacher, bad_teacher)
-    
-    # Initialize unlearning system
-    unlearning = TeacherStudentUnlearning(good_teacher, bad_teacher, student, config)
-    
-    # Train student
-    unlearning.train_student(retain_train_loader, forget_train_loader, config['training']['num_epochs'])
-    
-    # Save final models
-    unlearning.save_checkpoint("final_checkpoint.pt")
-    config_manager.save_config("config.json")
+    try:
+        # Initialize configuration
+        config_manager = ConfigManager()
+        config = config_manager.config
+        
+        # Initialize wandb
+        wandb.init(
+            project="llm-unlearning",
+            config=config
+        )
+        
+        # Keep rest of initialization
+        model_manager = ModelManager(config)
+        data_manager = DataManager(config)
+        
+        # Load and prepare data
+        retain_train_loader, forget_train_loader, retain_val_loader, forget_val_loader = data_manager.create_dataloaders(batch_size=8)
+        
+        # Initialize models
+        good_teacher, bad_teacher = model_manager.initialize_teachers()
+        student = model_manager.initialize_student()
+        
+        # Freeze teachers
+        model_manager.freeze_teachers(good_teacher, bad_teacher)
+        
+        # Initialize unlearning system
+        unlearning = TeacherStudentUnlearning(good_teacher, bad_teacher, student, config)
+        
+        # Train student
+        training_history = unlearning.train_student(retain_train_loader, forget_train_loader, retain_val_loader, config['training']['num_epochs'])
+        
+        # Final evaluation
+        final_results = unlearning.evaluate(retain_val_loader, forget_val_loader)
+        
+        # Log final results summary
+        wandb.run.summary.update({
+            "final_retain_regurgitation": np.mean(final_results['retain']['regurgitation-score']),
+            "final_retain_knowledge": np.mean(final_results['retain']['knowledge-score']),
+            "final_forget_regurgitation": np.mean(final_results['forget']['regurgitation-score']),
+            "final_forget_knowledge": np.mean(final_results['forget']['knowledge-score']),
+            "training_epochs": config['training']['num_epochs'],
+            "best_validation_loss": min(filter(None, training_history['val_losses']))
+        })
+
+        # Save final results to a file
+        with open(os.path.join(config['checkpoints_dir'], 'final_results.json'), 'w') as f:
+            json.dump(final_results, f, indent=4)
+            
+        # Log final results file as artifact
+        final_results_artifact = wandb.Artifact(
+            "final_results", 
+            type="results",
+            description="Final evaluation results"
+        )
+        final_results_artifact.add_file(os.path.join(config['checkpoints_dir'], 'final_results.json'))
+        wandb.log_artifact(final_results_artifact)
+        
+        # Save config
+        config_manager.save_config("config.json")
+        
+        # Clean up wandb
+        unlearning.finish()
+        
+    except Exception as e:
+        print(f"Training failed with error: {str(e)}")
+        wandb.finish(exit_code=1)
+        raise e
