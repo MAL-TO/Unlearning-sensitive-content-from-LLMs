@@ -14,11 +14,11 @@ def main():
         config = json.load(file)
     model=model_loader(config["model_type"])
     if config["optimizer"]=="adam":
-        optimizer=torch.optim.Adam(model.parameters(),config["lr"])
+        optimizer=torch.optim.Adam(model.parameters(),lr=config["lr"])
     elif config["optimizer"]=="sgd":
-        optimizer=torch.optim.SGD(model.parameters(),config["lr"])
-    
-    
+        optimizer=torch.optim.SGD(model.parameters(),lr=config["lr"])
+    elif config["optimizer"]=="adamw":
+        optimizer=torch.optim.AdamW(model.parameters(),lr=config["lr"])
     if config["train_type"]=="gtbt":
         config_manager = ConfigManager()
         config = config_manager.config
@@ -55,11 +55,15 @@ def main():
         retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
 
         final_model=GradientDifferenceTrainLoop(model,forget_t_dataloader,retain_t_dataloader,forget_v_dataloader,retain_v_dataloader,config["epochs"],config["device"]
-                                            ,optimizer,config["alpha"],config["gamma"])
+                                            ,optimizer,config["alpha"],config["gamma"],config["project_name"],config)
+        torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
     elif config["train_type"]=="ga":
         retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
 
         final_model=GradientAscentTrainingLoop(model,forget_t_dataloader,forget_v_dataloader,config["epochs"],config["device"]
-                                            ,optimizer)
+                                            ,optimizer,config["project_name"],config)
+        torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
 
-        
+
+if __name__ == "__main__":
+    main()

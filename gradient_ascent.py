@@ -1,5 +1,7 @@
 
 import torch
+import wandb
+import numpy as np
 def get_answer_loss(operation, batch, model, device="cuda:0"):
     """
     Compute the loss on the answer (i.e. y) part.
@@ -20,20 +22,22 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
         batch["labels"].to(device)
     )
     outputs = model(input_ids,attention_mask=attention_mask)
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-
-
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="mean")
     # GA or GD.
-    position_loss = loss_fct(outputs["logits"].permute(0,2,1), labels)
+    #[2,128] labels
+    #[2,128,500132]
+    
+    position_loss = loss_fct(outputs.logits[:,:-1,:].permute(0,2,1), labels[:,1:])
     if operation == "ga":  # Negative the direction for GA.
         position_loss = -position_loss
+    
 
 
-    return position_loss.mean()
+    return position_loss
 
 
     
-def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_retain_set,epoch,device,optimizer,alpha,gamma):
+def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_retain_set,epoch,device,optimizer,alpha,gamma,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -51,12 +55,21 @@ def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_r
 
   :returns: trained model
   """
+  wandb.init(
+    # set the wandb project where this run will be logged
+    project=project_name,
+
+    # track hyperparameters and run metadata
+    config=config
+)
   model.to(device)
   model.train()
   for forget_epoch in range(epoch):
+
     epoch_loss=0
+    batch_no=1
     for forget,retain in zip(forget_set,retain_set):
-        model.zero_grad()
+        optimizer.zero_grad()
         L_f=get_answer_loss("ga",forget,model,device)
         L_r=get_answer_loss("gd",retain,model,device)
         loss=alpha*L_f+gamma*L_r
@@ -64,21 +77,34 @@ def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_r
         epoch_loss+=loss.item()
         loss.backward()
         optimizer.step()
+        print(f"Batch {batch_no} Loss:{loss.item()}")
+        wandb.log({"Batch Loss":loss.item()})
+        batch_no+=1
     total_val_loss=0
     with torch.no_grad():
         for val_f,val_r in zip(val_forget_set,val_retain_set):
             val_L_f=get_answer_loss("ga",val_f,model,device)
             val_L_r=get_answer_loss("gd",val_r,model,device)
             val_loss=alpha*val_L_f+gamma*val_L_r
+            wandb.log({"Batch Val Loss":val_loss.item()})
+            print(f"Batch Val Loss : {val_loss.item()}")
             total_val_loss+=val_loss.item()
-    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss} Validation Loss: {total_val_loss:.4f}")
+    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(forget_set)} Validation Loss: {total_val_loss/len(val_forget_set):.4f}")
 
   
 
   return model
-def GradientAscentTrainingLoop(model,forget_set,val_forget_set,epoch,device,optimizer):
+def GradientAscentTrainingLoop(model,forget_set,val_forget_set,epoch,device,optimizer,project_name,config):
+    wandb.init(
+    # set the wandb project where this run will be logged
+    project=project_name,
+
+    # track hyperparameters and run metadata
+    config=config
+      )
     for forget_epoch in range(epoch):
       epoch_loss=0
+      batch_no=1
       for forget in forget_set:
         model.zero_grad()
         loss=get_answer_loss("ga",forget,model,device)
@@ -86,10 +112,15 @@ def GradientAscentTrainingLoop(model,forget_set,val_forget_set,epoch,device,opti
         epoch_loss+=loss.item()
         loss.backward()
         optimizer.step()
+        print(f"Batch {batch_no} Loss:{loss.item()}")
+        wandb.log({"Batch Loss":loss.item()})
+        batch_no+=1
       total_val_loss=0
       with torch.no_grad():
         for val_f in val_forget_set:
               val_loss=get_answer_loss("ga",val_f,model,device)
+              wandb.log({"Batch Val Loss":val_loss.item()})
+              print(f"Batch Val Loss : {val_loss.item()}")
               total_val_loss+=val_loss.item()
       print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss} Validation Loss: {total_val_loss:.4f}")
     return model

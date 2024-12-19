@@ -20,7 +20,7 @@ class UnlearningDataset(torch.utils.data.Dataset):
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
 
         # Tokenize the input and output with padding and truncation
-        self.data = data
+        self.data = data      
         self.X = self.data["input"].apply(
             lambda x: self.tokenizer(x, padding="max_length", truncation=True, max_length=128, return_tensors=None)
         )
@@ -82,7 +82,19 @@ def model_loader(model_type):
    elif model_type=="1B":
       model = AutoModelForCausalLM.from_pretrained(model_path+'-1B-model')
       return model
-      
+def genrate_ex_sentences(model,data,model_type,max_length=100):    
+    if model_type == "7B":
+        tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
+    elif model_type == "1B":
+        tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
+    input_ids = tokenizer.encode(data, return_tensors='pt') 
+    output = model.generate(input_ids, max_length=max_length, do_sample=True, pad_token_id=tokenizer.eos_token_id)
+    return tokenizer.decode(output[0], skip_special_tokens=True)
+
+
+
+
+   
 
 
 ################################################################################################################################################################################
