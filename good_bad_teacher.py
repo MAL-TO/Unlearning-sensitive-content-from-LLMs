@@ -95,8 +95,8 @@ class TeacherStudentUnlearning:
             print(f"\nEpoch {epoch+1}/{num_epochs}")
             
             # Training steps
-            retain_loss = self.train_forget_step(retain_loader, optimizer)
-            forget_loss = self.train_retain_step(forget_loader, optimizer)
+            forget_loss = self.train_forget_step(forget_loader, optimizer)
+            retain_loss = self.train_retain_step(retain_loader, optimizer)
 
             # Log training metrics
             wandb.log({
@@ -162,6 +162,128 @@ class TeacherStudentUnlearning:
                 print(f"Checkpoint saved for epoch {epoch+1}")
                     
         return training_history
+    
+    def train_student_new(self, retain_loader, forget_loader, validation_loader, num_epochs):
+        # Move models to device
+        self.good_teacher.to(self.device)
+        self.bad_teacher.to(self.device)
+        self.student.to(self.device)
+        
+        # Ensure teachers are in eval mode and gradients are disabled
+        self.good_teacher.eval()
+        self.bad_teacher.eval()
+        
+        validation_frequency = self.config['training']['validation_frequency']
+        optimizer = torch.optim.Adam(self.student.parameters(), lr=self.config['training']['learning_rate'])
+        
+        # Initialize tracking variables
+        training_history = {
+            'combined_losses': [],
+            'retain_losses': [],
+            'forget_losses': [],
+            'val_losses': [],
+            'val_metrics': []
+        }
+        
+        for epoch in range(num_epochs):
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            epoch_retain_losses = []
+            epoch_forget_losses = []
+            
+            # Set student to training mode
+            self.student.train()
+            
+            # Use tqdm for progress bar
+            total_batches = min(len(retain_loader), len(forget_loader))
+            pbar = tqdm(zip(retain_loader, forget_loader), total=total_batches)
+            
+            for retain_batch, forget_batch in pbar:
+                try:
+                    optimizer.zero_grad()
+                    
+                    # Move batches to device and get batch sizes
+                    retain_batch = {k: v.to(self.device) for k, v in retain_batch.items()}
+                    forget_batch = {k: v.to(self.device) for k, v in forget_batch.items()}
+                    
+                    retain_size = retain_batch['input_ids'].size(0)
+                    forget_size = forget_batch['input_ids'].size(0)
+                    total_size = retain_size + forget_size
+                    
+                    # Calculate proportional weights
+                    retain_weight = retain_size / total_size
+                    forget_weight = forget_size / total_size
+                    
+                    # Retain loss calculation
+                    with torch.no_grad():
+                        good_teacher_output = self.good_teacher(**retain_batch)
+                    student_retain_output = self.student(**retain_batch)
+                    retain_loss = self.calculate_retain_loss(
+                        student_retain_output.logits,
+                        good_teacher_output.logits,
+                        retain_batch
+                    )
+                    
+                    # Forget loss calculation
+                    with torch.no_grad():
+                        bad_teacher_output = self.bad_teacher(**forget_batch)
+                    student_forget_output = self.student(**forget_batch)
+                    forget_loss = self.calculate_forget_loss(
+                        student_forget_output.logits,
+                        bad_teacher_output.logits,
+                        forget_batch
+                    )
+                    
+                    # Combine losses with proportional weighting
+                    combined_loss = (retain_weight * retain_loss + 
+                                forget_weight * forget_loss)
+                    
+                    # Backward pass and optimization
+                    combined_loss.backward()
+                    optimizer.step()
+                    
+                    # Store losses for monitoring
+                    epoch_retain_losses.append(retain_loss.item())
+                    epoch_forget_losses.append(forget_loss.item())
+                    
+                    # Update progress bar
+                    pbar.set_description(f"Loss: {combined_loss.item():.4f}")
+                    
+                except RuntimeError as e:
+                    print(f"Error in batch processing: {str(e)}")
+                    continue
+            
+            # Calculate epoch averages
+            avg_retain_loss = sum(epoch_retain_losses) / len(epoch_retain_losses)
+            avg_forget_loss = sum(epoch_forget_losses) / len(epoch_forget_losses)
+            
+            # Store in training history
+            training_history['retain_losses'].append(avg_retain_loss)
+            training_history['forget_losses'].append(avg_forget_loss)
+            
+            # Validation step
+            if (epoch + 1) % validation_frequency == 0 and validation_loader is not None:
+                self.student.eval()
+                val_loss, val_metrics = self.validate(validation_loader)
+                training_history['val_losses'].append(val_loss)
+                training_history['val_metrics'].append(val_metrics)
+                
+                print(f"\nEpoch {epoch+1} Results:")
+                print(f"Average Retain Loss: {avg_retain_loss:.4f}")
+                print(f"Average Forget Loss: {avg_forget_loss:.4f}")
+                print(f"Validation Loss: {val_loss:.4f}")
+                print("Validation Metrics:", val_metrics)
+            
+            # Save checkpoint if needed
+            if (epoch + 1) % self.config['training']['checkpoint_frequency'] == 0:
+                self.save_checkpoint(
+                    path=os.path.join(self.config['checkpoints_dir'], f'checkpoint_epoch_{epoch+1}.pt'),
+                    epoch=epoch,
+                    val_loss=val_loss if 'val_loss' in locals() else None,
+                    metrics=val_metrics if 'val_metrics' in locals() else None
+                )
+        
+        return training_history
+
 
     def validate(self, validation_loader):
         """Perform validation and calculate metrics"""
