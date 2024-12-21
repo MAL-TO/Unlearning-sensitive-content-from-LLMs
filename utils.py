@@ -21,24 +21,21 @@ class UnlearningDataset(torch.utils.data.Dataset):
 
         # Tokenize the input and output with padding and truncation
         self.data = data      
-        self.X = self.data["input"].apply(
-            lambda x: self.tokenizer(x, padding="max_length", truncation=True, max_length=128, return_tensors=None)
-        )
-        self.y = self.data["output"].apply(
-            lambda x: self.tokenizer(x, padding="max_length", truncation=True, max_length=128, return_tensors=None)
-        )
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        input_ids = torch.tensor(self.X.iloc[index]["input_ids"])
-        attention_mask = torch.tensor(self.X.iloc[index]["attention_mask"])
-        labels = torch.tensor(self.y.iloc[index]["input_ids"])
+        prompt = self.tokenizer(self.data.iloc[index]["input"],padding="max_length",truncation=True, max_length=512, return_tensors=None)
+        labels=self.tokenizer(f"{self.data.iloc[index]["input"]} {self.data.iloc[index]["output"]}",padding="max_length",truncation=True, max_length=512, return_tensors=None)
+        attention_mask = prompt["attention_mask"]
+        start_locs=self.tokenizer(self.data.iloc[index]["input"])
+
         return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
+            "input_ids": torch.tensor(prompt["input_ids"]),
+            "attention_mask": torch.tensor(attention_mask),
+            "start_locs":len(start_locs["input_ids"])-1,
+            "labels": torch.tensor(labels["input_ids"]),
         }
 def compute_meanloss(val_set,criterion,model,device):
   mean_loss=0

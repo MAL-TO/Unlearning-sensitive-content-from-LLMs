@@ -2,6 +2,9 @@
 import torch
 import wandb
 import numpy as np
+from transformers import AutoTokenizer,AutoModelForCausalLM
+
+tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
 def get_answer_loss(operation, batch, model, device="cuda:0"):
     """
     Compute the loss on the answer (i.e. y) part.
@@ -16,24 +19,43 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
        The loss.
     """
     assert operation in ["ga", "gd"], "Operation must be either GA or GD."
-    input_ids, attention_mask,labels  = (
+    input_ids, attention_mask, start_locs, labels = (
         batch["input_ids"].to(device),
         batch["attention_mask"].to(device),
-        batch["labels"].to(device)
+        batch["start_locs"],
+        batch["labels"].to(device),
     )
-    outputs = model(input_ids,attention_mask=attention_mask)
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="mean")
-    # GA or GD.
-    #[2,128] labels
-    #[2,128,500132]
-    
-    position_loss = loss_fct(outputs.logits[:,:-1,:].permute(0,2,1), labels[:,1:])
-    if operation == "ga":  # Negative the direction for GA.
-        position_loss = -position_loss
-    
+    outputs = model(input_ids, attention_mask=attention_mask)
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+    # Shift one to predict next token.
+    shift_logits = outputs.logits[:, :-1, :]
+    shift_labels = labels[:, 1:]
+    losses = []
+    for bid in range(input_ids.shape[0]):
+        one_inp, one_st = input_ids[bid], start_locs[bid]
+
+        # GA or GD.
+        position_loss = loss_fct(shift_logits[bid], shift_labels[bid])
+        if operation == "ga":  # Negative the direction for GA.
+            position_loss = -position_loss
+
+        # Simply put equal weights on all answers.
+        position_weight = torch.zeros_like(one_inp)
+        assert len(position_weight) == len(position_loss) + 1
+        position_weight[one_st:] = 1  # only focus on answer part
+
+        # Ignore the padding part.
+        position_weight[one_inp == 1] = 0
+        if position_weight.sum() > 0:
+            position_weight = position_weight / position_weight.sum()
+
+        one_loss = (position_weight[:-1] * position_loss).sum()
+        losses.append(one_loss)
+    final_loss = torch.stack(losses).mean()
+
+    return final_loss
 
 
-    return position_loss
 
 
     
