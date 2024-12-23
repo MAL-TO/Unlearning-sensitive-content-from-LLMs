@@ -12,7 +12,7 @@ def load_token():
 
 
 class UnlearningDataset(torch.utils.data.Dataset):
-    def __init__(self, model_type, data):
+    def __init__(self, model_type, retain,forget):
         # Load the appropriate tokenizer
         if model_type == "7B":
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
@@ -20,11 +20,14 @@ class UnlearningDataset(torch.utils.data.Dataset):
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
 
         # Tokenize the input and output with padding and truncation
-        self.data = data      
+        self.retain = retain
+        self.forget=forget      
+        self.data=pd.concat([self.retain,self.forget])
 
     def __len__(self):
         return len(self.data)
-
+    #Prompt + Answer
+    #Prompt + Answer
     def __getitem__(self, index):
         prompt = self.tokenizer(self.data.iloc[index]["input"],padding="max_length",truncation=True, max_length=512, return_tensors=None)
         labels=self.tokenizer(f"{self.data.iloc[index]["input"]} {self.data.iloc[index]["output"]}",padding="max_length",truncation=True, max_length=512, return_tensors=None)
@@ -36,6 +39,7 @@ class UnlearningDataset(torch.utils.data.Dataset):
             "attention_mask": torch.tensor(attention_mask),
             "start_locs":len(start_locs["input_ids"])-1,
             "labels": torch.tensor(labels["input_ids"]),
+            "split":self.data.iloc[index]["split"]
         }
 def compute_meanloss(val_set,criterion,model,device):
   mean_loss=0
@@ -49,7 +53,7 @@ def scheduler_step(alpha, step_size, factor=0.1):
     if step_size > 0:
         return max(alpha * factor, 0.01)  # Ensure alpha doesn't go to zero
     return alpha
-def prepare_data(model_type,batch_size):
+def prepare_data(model_type,batch_size,task_type):
   path = "/data1/malto/unlearning_llm/"
    ## Fetch and load dataset:
   dataset_path = path + 'datasets/semeval25-unlearning-data/'
@@ -58,16 +62,28 @@ def prepare_data(model_type,batch_size):
   retain_validation_df = pd.read_parquet(dataset_path+'data/retain_validation-00000-of-00001.parquet', engine='pyarrow') # Retain split: validation set
   forget_train_df = pd.read_parquet(dataset_path+'data/forget_train-00000-of-00001.parquet', engine='pyarrow') # Forget split: train set
   forget_validation_df = pd.read_parquet(dataset_path+'data/forget_validation-00000-of-00001.parquet', engine='pyarrow') # Forget split: validation set
+  if task_type=="Task1":
+     retain_train_df=retain_train_df[retain_train_df["task"]=="Task1"]
+     retain_validation_df=retain_validation_df[retain_validation_df["task"]=="Task1"]
+     forget_train_df=forget_train_df[forget_train_df["task"]=="Task1"]
+     forget_validation_df=forget_validation_df[forget_validation_df["task"]=="Task1"]
+  elif task_type=="Task2":
+      retain_train_df=retain_train_df[retain_train_df["task"]=="Task2"]
+      retain_validation_df=retain_validation_df[retain_validation_df["task"]=="Task2"]
+      forget_train_df=forget_train_df[forget_train_df["task"]=="Task2"]
+      forget_validation_df=forget_validation_df[forget_validation_df["task"]=="Task2"]
+  elif task_type=="Task3":
+     retain_train_df=retain_train_df[retain_train_df["task"]=="Task3"]
+     retain_validation_df=retain_validation_df[retain_validation_df["task"]=="Task3"]
+     forget_train_df=forget_train_df[forget_train_df["task"]=="Task3"]
+     forget_validation_df=forget_validation_df[forget_validation_df["task"]=="Task3"]
+     
     
-  retain_train=UnlearningDataset(model_type,retain_train_df)
-  forget_train=UnlearningDataset(model_type,forget_train_df)
-  retain_val=UnlearningDataset(model_type,retain_validation_df)
-  forget_val=UnlearningDataset(model_type,forget_validation_df)
-  retain_t_dataloader=torch.utils.data.DataLoader(retain_train,batch_size=batch_size,shuffle=True)
-  forget_t_dataloader=torch.utils.data.DataLoader(forget_train,batch_size=batch_size,shuffle=True)
-  retain_v_dataloader=torch.utils.data.DataLoader(retain_val,batch_size=batch_size,shuffle=True)
-  forget_v_dataloader=torch.utils.data.DataLoader(forget_val,batch_size=batch_size,shuffle=True)
-  return retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader
+  train=UnlearningDataset(model_type,retain_train_df,forget_train_df)
+  val=UnlearningDataset(model_type,retain_validation_df,forget_validation_df)
+  train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
+  val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
+  return train_dataloader,val_dataloader
 def model_loader(model_type):
    path = "/data1/malto/unlearning_llm/"
    model_path = path + 'models/semeval25-unlearning-model'

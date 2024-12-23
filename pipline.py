@@ -4,6 +4,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import json
 from gradient_ascent import *
+from claudiosmethod import *
 path = "/data1/malto/unlearning_llm/"
 
 
@@ -13,6 +14,7 @@ def main():
     with open('config.json', 'r') as file:
         config = json.load(file)
     model=model_loader(config["model_type"])
+    full_model=model_loader(config["model_type"])
     if config["optimizer"]=="adam":
         optimizer=torch.optim.Adam(model.parameters(),lr=config["lr"])
     elif config["optimizer"]=="sgd":
@@ -52,17 +54,22 @@ def main():
         unlearning.save_checkpoint("final_checkpoint.pt")
         config_manager.save_config("config.json")
     elif config["train_type"]=="gd":
-        retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
+        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"])
 
-        final_model=GradientDifferenceTrainLoop(model,forget_t_dataloader,retain_t_dataloader,forget_v_dataloader,retain_v_dataloader,config["epochs"],config["device"]
+        final_model=GradientDifferenceTrainLoop(model,train_set,val_set,config["epochs"],config["device"]
                                             ,optimizer,config["alpha"],config["gamma"],config["project_name"],config)
         torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
-    elif config["train_type"]=="ga":
-        retain_t_dataloader,retain_v_dataloader,forget_t_dataloader,forget_v_dataloader=prepare_data(config["model_type"],config["batch_size"])
+    elif config["train_type"]=="cl":
+        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"])
+        original_model = AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf")
 
-        final_model=GradientAscentTrainingLoop(model,forget_t_dataloader,forget_v_dataloader,config["epochs"],config["device"]
-                                            ,optimizer,config["project_name"],config)
+
+
+        final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
         torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
+
+
+
 
 
 if __name__ == "__main__":

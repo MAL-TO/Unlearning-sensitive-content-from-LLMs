@@ -963,3 +963,6 @@ wandb/run-20241222_002602-rbm7lox4/files/requirements.txt
 wandb/run-20241222_002602-rbm7lox4/logs/debug-core.log
 wandb/run-20241222_002602-rbm7lox4/logs/debug-internal.log
 wandb/run-20241222_002602-rbm7lox4/logs/debug.log
+gradient_difference_4.pth
+gradient_difference_5.pth
+gradient_difference_6.pth

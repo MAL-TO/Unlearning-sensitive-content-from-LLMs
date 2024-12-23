@@ -45,7 +45,6 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
         position_weight[one_st:] = 1  # only focus on answer part
 
         # Ignore the padding part.
-        position_weight[one_inp == 1] = 0
         if position_weight.sum() > 0:
             position_weight = position_weight / position_weight.sum()
 
@@ -59,7 +58,7 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
 
 
     
-def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_retain_set,epoch,device,optimizer,alpha,gamma,project_name,config):
+def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,alpha,gamma,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -90,11 +89,12 @@ def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_r
 
     epoch_loss=0
     batch_no=1
-    for forget,retain in zip(forget_set,retain_set):
+    for batch in train_set:
         optimizer.zero_grad()
-        L_f=get_answer_loss("ga",forget,model,device)
-        L_r=get_answer_loss("gd",retain,model,device)
-        loss=alpha*L_f+gamma*L_r
+        if batch["split"]=="forget":
+          loss=get_answer_loss("ga",batch,model,device)
+        elif batch["split"]=="retain":
+          loss=get_answer_loss("gd",batch,model,device)
 
         epoch_loss+=loss.item()
         loss.backward()
@@ -104,14 +104,15 @@ def GradientDifferenceTrainLoop(model,forget_set,retain_set,val_forget_set,val_r
         batch_no+=1
     total_val_loss=0
     with torch.no_grad():
-        for val_f,val_r in zip(val_forget_set,val_retain_set):
-            val_L_f=get_answer_loss("ga",val_f,model,device)
-            val_L_r=get_answer_loss("gd",val_r,model,device)
-            val_loss=alpha*val_L_f+gamma*val_L_r
-            wandb.log({"Batch Val Loss":val_loss.item()})
-            print(f"Batch Val Loss : {val_loss.item()}")
-            total_val_loss+=val_loss.item()
-    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(forget_set)} Validation Loss: {total_val_loss/len(val_forget_set):.4f}")
+        for batch in val_set:
+          if batch["split"]=="forget":
+            val_loss=get_answer_loss("ga",batch,model,device)
+          elif batch["split"]=="retain":
+            val_loss=get_answer_loss("gd",batch,model,device)
+          wandb.log({"Batch Val Loss":val_loss.item()})
+          print(f"Batch Val Loss : {val_loss.item()}")
+          total_val_loss+=val_loss.item()
+    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
 
   
 
