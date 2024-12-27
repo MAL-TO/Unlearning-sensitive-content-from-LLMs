@@ -108,7 +108,7 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
         epoch_loss+=loss.item()
         loss.backward()
         optimizer.step()
-        print(f"Batch {batch_no} Batch Type:{batch["split"]} Loss:{loss.item()}")
+        print(f"Batch {batch_no} Batch Type:{batch['split']} Loss:{loss.item()}")
         batch_no+=1
     total_val_loss=0
     with torch.no_grad():
