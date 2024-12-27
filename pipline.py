@@ -67,7 +67,7 @@ def main():
             model.load_state_dict(torch.load(config["model_path"],weights_only=True))
             print("Model is loaded")
 
-
+        
         final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
         torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
 

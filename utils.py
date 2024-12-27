@@ -37,7 +37,7 @@ class UnlearningDataset(torch.utils.data.Dataset):
             "attention_mask": torch.tensor(attention_mask),
             "start_locs":len(start_locs["input_ids"])-1,
             "labels": torch.tensor(labels["input_ids"]),
-            "split":self.data.iloc[index]["split"]
+            "split":1 if self.data.iloc[index]["split"]=="forget" else 0
         }
 def compute_meanloss(val_set,criterion,model,device):
   mean_loss=0
@@ -109,7 +109,7 @@ def model_loader(model_type):
    elif model_type=="1B":
       model = AutoModelForCausalLM.from_pretrained(model_path+'-1B-model')
       return model
-def genrate_ex_sentences(model,data,model_type,max_length=100):    
+def genrate_ex_sentences(model,data,model_type,max_length=300):    
     if model_type == "7B":
         tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
     elif model_type == "1B":
