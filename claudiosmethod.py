@@ -39,6 +39,25 @@ def compute_kl(pretrained_model, current_model, batch, device):
 
     return loss
 
+def kl_divergence(pretrained_model, current_model, batch, device,KL_temperature):
+    normal_outputs = current_model(
+        batch["input_ids"].to(device),
+        attention_mask=batch["attention_mask"].to(device),
+        labels=batch["labels"].to(device),
+    )
+
+    with torch.no_grad():
+        pretrained_outputs = pretrained_model(
+            batch["input_ids"].to(device),
+            attention_mask=batch["attention_mask"].to(device),
+            labels=batch["labels"].to(device),
+        )
+    teacher_out=torch.nn.functional.softmax(pretrained_outputs.logits / KL_temperature,-1)
+    student_out=torch.nn.functional.log_softmax(normal_outputs.logits / KL_temperature,-1)
+    return torch.nn.functional.kl_div(student_out,teacher_out,reduction="batchmean")
+
+   
+
 
 
 
@@ -80,24 +99,27 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
         optimizer.zero_grad()
         if batch["split"][0]=="forget":
            loss=compute_kl(pretrainedmodel,unlearnmodel,batch,device)
+           wandb.log({"Forget Loss":loss.item()})
         elif batch["split"][0]=="retain":
            loss=compute_kl(fullmodel,unlearnmodel,batch,device)
+           wandb.log({"Retain Loss":loss.item()})
         
 
         epoch_loss+=loss.item()
         loss.backward()
         optimizer.step()
         print(f"Batch {batch_no} Batch Type:{batch["split"]} Loss:{loss.item()}")
-        wandb.log({"Batch Loss":loss.item()})
         batch_no+=1
     total_val_loss=0
     with torch.no_grad():
         for batch in val_set:
             if batch["split"][0]=="forget":
                 val_loss=compute_kl(pretrainedmodel,unlearnmodel,batch,device)
+                wandb.log({"Forget Val Loss":val_loss.item()})
             elif batch["split"][0]=="retain":
                 val_loss=compute_kl(fullmodel,unlearnmodel,batch,device)
-            wandb.log({"Batch Val Loss":val_loss.item()})
+                wandb.log({"Retain Val Loss":val_loss.item()})
+            
             print(f"Batch Val Loss : {val_loss.item()}")
             total_val_loss+=val_loss.item()
     print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")

@@ -54,15 +54,18 @@ def main():
         unlearning.save_checkpoint("final_checkpoint.pt")
         config_manager.save_config("config.json")
     elif config["train_type"]=="gd":
-        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"])
+        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
 
         final_model=GradientDifferenceTrainLoop(model,train_set,val_set,config["epochs"],config["device"]
                                             ,optimizer,config["alpha"],config["gamma"],config["project_name"],config)
         torch.save(final_model.state_dict(), f"{config["file_name"]}.pth")
     elif config["train_type"]=="cl":
-        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"])
+        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
         original_model = AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf")
 
+        if config["extra_model"]=="true":
+            model.load_state_dict(torch.load(config["model_path"],weights_only=True))
+            print("Model is loaded")
 
 
         final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)

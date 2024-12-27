@@ -12,17 +12,15 @@ def load_token():
 
 
 class UnlearningDataset(torch.utils.data.Dataset):
-    def __init__(self, model_type, retain,forget):
+    def __init__(self, model_type, data):
         # Load the appropriate tokenizer
         if model_type == "7B":
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
         elif model_type == "1B":
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
 
-        # Tokenize the input and output with padding and truncation
-        self.retain = retain
-        self.forget=forget      
-        self.data=pd.concat([self.retain,self.forget])
+        # Tokenize the input and output with padding and truncation    
+        self.data=data
 
     def __len__(self):
         return len(self.data)
@@ -53,7 +51,7 @@ def scheduler_step(alpha, step_size, factor=0.1):
     if step_size > 0:
         return max(alpha * factor, 0.01)  # Ensure alpha doesn't go to zero
     return alpha
-def prepare_data(model_type,batch_size,task_type):
+def prepare_data(model_type,batch_size,task_type,train_type):
   path = "/data1/malto/unlearning_llm/"
    ## Fetch and load dataset:
   dataset_path = path + 'datasets/semeval25-unlearning-data/'
@@ -78,12 +76,28 @@ def prepare_data(model_type,batch_size,task_type):
      forget_train_df=forget_train_df[forget_train_df["task"]=="Task3"]
      forget_validation_df=forget_validation_df[forget_validation_df["task"]=="Task3"]
      
-    
-  train=UnlearningDataset(model_type,retain_train_df,forget_train_df)
-  val=UnlearningDataset(model_type,retain_validation_df,forget_validation_df)
-  train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
-  val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
-  return train_dataloader,val_dataloader
+  if train_type.lower()=="retain":
+    train=UnlearningDataset(model_type,retain_train_df)
+    val=UnlearningDataset(model_type,retain_validation_df)
+    train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
+    val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
+    return train_dataloader,val_dataloader
+  elif train_type.lower()=="forget":
+    train=UnlearningDataset(model_type,forget_train_df)
+    val=UnlearningDataset(model_type,forget_validation_df)
+    train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
+    val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
+    return train_dataloader,val_dataloader
+  else:
+     train_data=pd.concat([retain_train_df,forget_train_df])
+     val_data=pd.concat([retain_validation_df,forget_validation_df])
+     train=UnlearningDataset(model_type,train_data)
+     val=UnlearningDataset(model_type,val_data)
+     train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
+     val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
+     return train_dataloader,val_dataloader
+
+     
 def model_loader(model_type):
    path = "/data1/malto/unlearning_llm/"
    model_path = path + 'models/semeval25-unlearning-model'
