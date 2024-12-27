@@ -18,7 +18,7 @@ from statistics import harmonic_mean
 from rouge_score import rouge_scorer
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_curve, auc
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 def get_args_and_verify():
     parser = argparse.ArgumentParser(description="Script to run inference and evaluation")

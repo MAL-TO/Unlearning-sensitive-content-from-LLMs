@@ -28,7 +28,7 @@ class UnlearningDataset(torch.utils.data.Dataset):
     #Prompt + Answer
     def __getitem__(self, index):
         prompt = self.tokenizer(self.data.iloc[index]["input"],padding="max_length",truncation=True, max_length=512, return_tensors=None)
-        labels=self.tokenizer(f"{self.data.iloc[index]["input"]} {self.data.iloc[index]["output"]}",padding="max_length",truncation=True, max_length=512, return_tensors=None)
+        labels=self.tokenizer(f"{self.data.iloc[index]['input']} {self.data.iloc[index]['output']}",padding="max_length",truncation=True, max_length=512, return_tensors=None)
         attention_mask = prompt["attention_mask"]
         start_locs=self.tokenizer(self.data.iloc[index]["input"])
 
