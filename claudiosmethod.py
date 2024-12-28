@@ -45,11 +45,11 @@ def cross_entropy(pretrained_model, current_model,full_model,batch, device):
     out_teacher= (1-batch["split"])*prob_f + batch["split"]*prob_p
 
 
-    loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean()
+    loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean() 
 
     return loss
 
-def kl_divergence(pretrained_model, current_model, full_model,batch, device,KL_temperature):
+def kl_divergence(pretrained_model, current_model, full_model,batch, device):
     normal_outputs = current_model(
         batch["input_ids"].to(device),
         attention_mask=batch["attention_mask"].to(device),
@@ -68,15 +68,77 @@ def kl_divergence(pretrained_model, current_model, full_model,batch, device,KL_t
             attention_mask=batch["attention_mask"].to(device),
             labels=batch["labels"].to(device),
         )
-
     l=torch.unsqueeze(batch["split"],-1)
     l=torch.unsqueeze(l,-1).to(device)
-    pre_out=torch.nn.functional.softmax(pretrained_outputs.logits / KL_temperature,-1)
-    full_out=torch.nn.functional.softmax(full_model_outputs.logits / KL_temperature,-1)
-    teacher_out=(1-l)*full_out+l*pre_out
+    prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
+    prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
+    prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-    student_out=torch.nn.functional.log_softmax(normal_outputs.logits / KL_temperature,-1)
-    return torch.nn.functional.kl_div(student_out,teacher_out,reduction="batchmean")
+    out_teacher= (1-l)*prob_f + l*prob_p
+
+
+    loss = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
+
+
+    return loss
+def newloss(pretrained_model, current_model,full_model,batch, device):
+    tot_kl=0
+    tot_ce=0
+
+
+    
+
+    for i in range(batch["split"].shape[0]):
+        if batch["split"][i]==0:
+            normal_outputs = current_model(
+            batch["input_ids"][i].unsqueeze(0).to(device),
+            attention_mask=batch["attention_mask"][i].unsqueeze(0).to(device),
+            labels=batch["labels"][i].unsqueeze(0).to(device))
+            with torch.no_grad():
+                full_model_outputs = full_model(
+                    batch["input_ids"][i].unsqueeze(0).to(device),
+                    attention_mask=batch["attention_mask"][i].unsqueeze(0).to(device),
+                    labels=batch["labels"][i].unsqueeze(0).to(device),
+        )
+
+            l=torch.unsqueeze(batch["split"],-1)
+            l=torch.unsqueeze(l,-1).to(device)
+            prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
+            prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
+
+            out_teacher= prob_f
+
+
+            loss = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
+            tot_kl+=loss
+        elif batch["split"][i]==1:
+            normal_outputs = current_model(
+            batch["input_ids"][i].unsqueeze(0).to(device),
+            attention_mask=batch["attention_mask"][i].unsqueeze(0).to(device),
+            labels=batch["labels"][i].unsqueeze(0).to(device))
+            with torch.no_grad():
+                pretrained_outputs = pretrained_model(
+                batch["input_ids"][i].unsqueeze(0).to(device),
+                attention_mask=batch["attention_mask"][i].unsqueeze(0).to(device),
+                labels=batch["labels"][i].unsqueeze(0).to(device),
+        )
+            prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
+            prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
+
+            out_teacher= prob_p
+
+
+            loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean()
+            tot_ce+=loss
+    return tot_kl,tot_ce 
+
+
+
+
+
+
+
+
 
    
 
@@ -109,9 +171,9 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     # track hyperparameters and run metadata
     config=config
 )
-  unlearnmodel.to(device)
-  pretrainedmodel.to(device)
-  fullmodel.to(device)
+  unlearnmodel.to(device) ##student
+  pretrainedmodel.to(device) #orginal OLBO 1B for forget set (bad teacher)
+  fullmodel.to(device) #challenge's pre trained model for retain set (good teacher)
   unlearnmodel.train()
   for forget_epoch in range(epoch):
 
@@ -120,11 +182,22 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     for batch in train_set:
         optimizer.zero_grad()
         if config["loss"]=="kl":
-           loss=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device,1)
+           loss=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
            wandb.log({"Loss":loss.item()})
         elif config["loss"]=="ce":
            loss=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
            wandb.log({"Loss":loss.item()})
+        elif config["loss"]=="mix":
+            loss1=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+            loss2=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+            loss=config["alpha"]*loss1+config["gamma"]*loss2
+            wandb.log({"Loss":loss.item()})
+        elif config["loss"]=="mix2":
+            kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+            loss=config["alpha"]*kl+config["gamma"]*ce
+            wandb.log({"Loss":loss.item()})
+
+        
         
 
         epoch_loss+=loss.item()
@@ -141,6 +214,16 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
             elif config["loss"]=="ce":
                 val_loss=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
                 wandb.log({"Val Loss":val_loss.item()})
+            elif config["loss"]=="mix":
+                loss1=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                loss2=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                val_loss=config["alpha"]*loss1+config["gamma"]*loss2
+                wandb.log({"Val Loss":loss.item()})
+            elif config["loss"]=="mix2":
+                kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                val_loss=config["alpha"]*kl+config["gamma"]*ce
+                wandb.log({"Val Loss":loss.item()})
+            
             
             print(f"Batch Val Loss : {val_loss.item()}")
             total_val_loss+=val_loss.item()

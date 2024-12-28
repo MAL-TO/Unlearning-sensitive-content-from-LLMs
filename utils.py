@@ -3,6 +3,9 @@ import torch
 from datasets import load_dataset
 import pandas as pd
 from transformers import AutoTokenizer,AutoModelForCausalLM
+from evaluate_generations import rouge_scorer
+scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+import pandas as pd
 
 def load_token():
     path = "/data1/malto/unlearning_llm/token.txt"
@@ -110,13 +113,42 @@ def model_loader(model_type):
       model = AutoModelForCausalLM.from_pretrained(model_path+'-1B-model')
       return model
 def genrate_ex_sentences(model,data,model_type,max_length=300):    
+    model.to("cuda")
     if model_type == "7B":
         tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
     elif model_type == "1B":
         tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
-    input_ids = tokenizer.encode(data, return_tensors='pt') 
+    input_ids = tokenizer.encode(data, return_tensors='pt').to("cuda") 
     output = model.generate(input_ids, max_length=max_length, do_sample=True, pad_token_id=tokenizer.eos_token_id)
-    return tokenizer.decode(output[0], skip_special_tokens=True)
+    
+    out=tokenizer.decode(output[0], skip_special_tokens=True)
+    return out[len(data)+1:]
+def cal_rouge_score(model,data,model_type,max_length=300):
+  scores=[]
+  for i in range(len(data)):
+    labels=data["output"][i]
+    generated=genrate_ex_sentences(model,data["input"][i],"1B",300)
+    score=scorer.score(labels,generated)
+    scores.append(score)
+  precision_r=[]
+  recall_r=[]
+  fm_score_r=[]
+  precision_rl=[]
+  recall_rl=[]
+  fm_score_rl=[]
+  for i in scores:
+    precision_r.append(i["rouge1"].precision)
+    recall_r.append(i["rouge1"].recall)
+    fm_score_r.append(i["rouge1"].fmeasure)
+    precision_rl.append(i["rougeL"].precision)
+    recall_rl.append(i["rougeL"].recall)
+    fm_score_rl.append(i["rougeL"].fmeasure)
+  return pd.DataFrame({"precision_r":precision_r,"recall_r":recall_r,"f1_score_r":fm_score_r,"precision_rl":precision_rl,"recall_rl":recall_rl,"f1_score_rl":fm_score_rl})
+
+
+
+
+
 
 
 
