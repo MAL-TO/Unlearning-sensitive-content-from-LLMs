@@ -38,11 +38,13 @@ def cross_entropy(pretrained_model, current_model,full_model,batch, device):
         )
 
     # P: pretrained model; Q: current model.
+    l=torch.unsqueeze(batch["split"],-1)
+    l=torch.unsqueeze(l,-1).to(device)
     prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
     prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-    out_teacher= (1-batch["split"])*prob_f + batch["split"]*prob_p
+    out_teacher= (1-l)*prob_f + l*prob_p
 
 
     loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean() 
@@ -100,7 +102,6 @@ def newloss(pretrained_model, current_model,full_model,batch, device):
                     attention_mask=batch["attention_mask"][i].unsqueeze(0).to(device),
                     labels=batch["labels"][i].unsqueeze(0).to(device),
         )
-
             l=torch.unsqueeze(batch["split"],-1)
             l=torch.unsqueeze(l,-1).to(device)
             prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)

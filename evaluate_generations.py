@@ -19,6 +19,7 @@ from rouge_score import rouge_scorer
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_curve, auc
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import sys
 
 def get_args_and_verify():
     parser = argparse.ArgumentParser(description="Script to run inference and evaluation")
@@ -81,7 +82,6 @@ def inference(args, model, tokenizer):
         train_dataset = raw_datasets["train"]
 
         output_dic = defaultdict(lambda :{'id': [], 'task': [], 'input': [], 'expected_output': [], 'model_output': [], 'nll': []})
-
         with accelerator.split_between_processes(train_dataset, apply_padding=True) as data:
             for idx in tqdm(range(len(data['input']))):
                 question, answer = data["input"][idx], data["output"][idx]

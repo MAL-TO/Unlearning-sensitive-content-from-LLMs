@@ -92,8 +92,8 @@ def prepare_data(model_type,batch_size,task_type,train_type):
     val_dataloader=torch.utils.data.DataLoader(val,batch_size=batch_size,shuffle=True)
     return train_dataloader,val_dataloader
   else:
-     train_data=pd.concat([retain_train_df,forget_train_df])
-     val_data=pd.concat([retain_validation_df,forget_validation_df])
+     train_data=pd.concat([retain_train_df,forget_train_df],ignore_index=True)
+     val_data=pd.concat([retain_validation_df,forget_validation_df],ignore_index=True)
      train=UnlearningDataset(model_type,train_data)
      val=UnlearningDataset(model_type,val_data)
      train_dataloader=torch.utils.data.DataLoader(train,batch_size=batch_size,shuffle=True)
@@ -119,31 +119,45 @@ def genrate_ex_sentences(model,data,model_type,max_length=300):
     elif model_type == "1B":
         tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
     input_ids = tokenizer.encode(data, return_tensors='pt').to("cuda") 
-    output = model.generate(input_ids, max_length=max_length, do_sample=True, pad_token_id=tokenizer.eos_token_id)
+    output = model.generate(input_ids, max_new_tokens=max_length, do_sample=False,  use_cache=True,pad_token_id=tokenizer.eos_token_id)
     
     out=tokenizer.decode(output[0], skip_special_tokens=True)
     return out[len(data)+1:]
-def cal_rouge_score(model,data,model_type,max_length=300):
-  scores=[]
+def cal_rouge_score(model,retain_data,forget_data,model_type,max_length=300):
+  data=pd.concat([retain_data,forget_data],ignore_index=True)
+  regurgitation_score_rouge_1_retain=[]
+  regurgitation_score_retain=[]
+  knowledge_score_retain=[]
+  regurgitation_score_rouge_1_forget=[]
+  regurgitation_score_forget=[]
+  knowledge_score_forget=[]
   for i in range(len(data)):
     labels=data["output"][i]
-    generated=genrate_ex_sentences(model,data["input"][i],"1B",300)
-    score=scorer.score(labels,generated)
-    scores.append(score)
-  precision_r=[]
-  recall_r=[]
-  fm_score_r=[]
-  precision_rl=[]
-  recall_rl=[]
-  fm_score_rl=[]
-  for i in scores:
-    precision_r.append(i["rouge1"].precision)
-    recall_r.append(i["rouge1"].recall)
-    fm_score_r.append(i["rouge1"].fmeasure)
-    precision_rl.append(i["rougeL"].precision)
-    recall_rl.append(i["rougeL"].recall)
-    fm_score_rl.append(i["rougeL"].fmeasure)
-  return pd.DataFrame({"precision_r":precision_r,"recall_r":recall_r,"f1_score_r":fm_score_r,"precision_rl":precision_rl,"recall_rl":recall_rl,"f1_score_rl":fm_score_rl})
+    generated=genrate_ex_sentences(model,data["input"][i],model_type,256)
+    if "sc" in data["id"][i][-3:]:
+      score=scorer.score(labels,generated)
+      if data["split"][i]=="retain":
+        regurgitation_score_rouge_1_retain.append(score["rouge1"].recall)
+        regurgitation_score_retain.append(score["rougeL"].recall)
+        print(f'Retain Rouge1:{score["rouge1"].recall} RougeL: {score["rougeL"].recall}')
+      elif data["split"][i]=="forget":
+         regurgitation_score_rouge_1_forget.append(1-score["rouge1"].recall)
+         regurgitation_score_forget.append(1-score["rougeL".recall])
+         print(f'Forget Rouge1:{1-score["rouge1"].recall} RougeL: {1-score["rougeL"].recall}')
+         
+    elif "qa" in data["id"][i][-3:]:
+      if data["split"][i]=="retain":
+        knowledge_score_retain.append(int(labels.strip().lower()==generated.strip().lower()))
+        print(f'Retain Generated: {generated} Label: {labels} Knowledge Score:{int(labels.strip().lower()==generated.strip().lower())}')
+      elif data["split"][i]=="forget":
+         knowledge_score_forget.append(int(labels.strip().lower()==generated.strip().lower()))
+         print(f'Forget Generated: {generated} Label: {labels} Knowledge Score:{int(labels.strip().lower()==generated.strip().lower())}')
+       
+
+  return pd.DataFrame({"regurgitation_score_rouge_1_retain":regurgitation_score_rouge_1_retain,"regurgitation_score_retain":regurgitation_score_retain,
+                       "knowledge_score_retain":knowledge_score_retain,"regurgitation_score_rouge_1_forget":regurgitation_score_rouge_1_forget,
+                       "regurgitation_score_forget":regurgitation_score_forget,
+                       "knowledge_score_retain":knowledge_score_forget})
 
 
 

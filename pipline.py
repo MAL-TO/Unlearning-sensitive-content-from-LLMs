@@ -58,7 +58,9 @@ def main():
 
         final_model=GradientDifferenceTrainLoop(model,train_set,val_set,config["epochs"],config["device"]
                                             ,optimizer,config["alpha"],config["gamma"],config["project_name"],config)
-        torch.save(final_model.state_dict(), f"{config['file_name']}.pth")
+        final_model.save_pretrained(config["file_name"])
+        tokenizer.save_pretrained(config["file_name"])
+
     elif config["train_type"]=="cl":
         train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
         original_model = AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf")
@@ -69,7 +71,8 @@ def main():
 
         
         final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
-        torch.save(final_model.state_dict(), f"{config['file_name']}.pth")
+        final_model.save_pretrained(config["file_name"])
+        tokenizer.save_pretrained(config["file_name"])
 
 
 
