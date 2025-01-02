@@ -58,7 +58,7 @@ def get_answer_loss(operation, batch, model, device="cuda:0"):
 
 
     
-def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,alpha,gamma,project_name,config):
+def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -91,9 +91,9 @@ def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,a
     batch_no=1
     for batch in train_set:
         optimizer.zero_grad()
-        if batch["split"]=="forget":
+        if batch["split"]==1:
           loss=get_answer_loss("ga",batch,model,device)
-        elif batch["split"]=="retain":
+        elif batch["split"]==0:
           loss=get_answer_loss("gd",batch,model,device)
 
         epoch_loss+=loss.item()
@@ -105,9 +105,9 @@ def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,a
     total_val_loss=0
     with torch.no_grad():
         for batch in val_set:
-          if batch["split"]=="forget":
+          if batch["split"]==1:
             val_loss=get_answer_loss("ga",batch,model,device)
-          elif batch["split"]=="retain":
+          elif batch["split"]==0:
             val_loss=get_answer_loss("gd",batch,model,device)
           wandb.log({"Batch Val Loss":val_loss.item()})
           print(f"Batch Val Loss : {val_loss.item()}")

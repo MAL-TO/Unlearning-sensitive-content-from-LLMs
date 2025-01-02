@@ -139,3 +139,23 @@ claudio_forget_4/tokenizer_config.json
 claudio_forget_4/tokenizer.json
 
 config.json
+new_evaluation/mia_test/member.jsonl
+new_evaluation/mia_test/nonmember.jsonl
+new_evaluation/mia_test2/member.jsonl
+new_evaluation/mia_test2/nonmember.jsonl
+orginal_model/generation_config.json
+orginal_model/model-00001-of-00002.safetensors
+orginal_model/model-00002-of-00002.safetensors
+orginal_model/model.safetensors.index.json
+orginal_model/special_tokens_map.json
+orginal_model/tokenizer_config.json
+orginal_model/tokenizer.json
+evaluations/ce_epoch_8.jsonl
+evaluations/evaluation_results.jsonl
+ga_1/generation_config.json
+ga_1/model-00001-of-00002.safetensors
+ga_1/model-00002-of-00002.safetensors
+ga_1/model.safetensors.index.json
+ga_1/special_tokens_map.json
+ga_1/tokenizer_config.json
+ga_1/tokenizer.json

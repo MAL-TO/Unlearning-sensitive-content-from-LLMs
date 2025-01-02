@@ -61,7 +61,7 @@ def main():
         train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
 
         final_model=GradientDifferenceTrainLoop(model,train_set,val_set,config["epochs"],config["device"]
-                                            ,optimizer,config["alpha"],config["gamma"],config["project_name"],config)
+                                            ,optimizer,config["project_name"],config)
         final_model.save_pretrained(config["file_name"])
         tokenizer.save_pretrained(config["file_name"])
 

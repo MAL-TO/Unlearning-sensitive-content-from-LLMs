@@ -172,13 +172,14 @@ def gradient_ascent(pretrained_model, current_model,full_model,batch, device):
     prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-    out_teacher= (1-l)*cross_entropy() - l*cross_entropy()
+    out_teacher= (1-l)*prob_f + l*prob_p
 
 
     loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean() 
+    if batch["split"][0]==1:
+        loss=-loss
 
     return loss
-
 
 
 

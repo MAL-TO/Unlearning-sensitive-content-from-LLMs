@@ -87,15 +87,16 @@ def inference(args, model, tokenizer):
         output_dic = defaultdict(lambda :{'id': [], 'task': [], 'input': [], 'expected_output': [], 'model_output': [], 'nll': []})
 
         with accelerator.split_between_processes(train_dataset, apply_padding=True) as data:
-            for idx in tqdm(range(len(data['input']))):
-                question, answer = data["input"][idx], data["output"][idx]
-                output_dic[accelerator.process_index]['id'].append(data["id"][idx])
-                output_dic[accelerator.process_index]['task'].append(data["task"][idx])
-                output_dic[accelerator.process_index]['input'].append(data["input"][idx])
-                output_dic[accelerator.process_index]['expected_output'].append(data["output"][idx])
+            for idx in tqdm(range(len(data['input'][0]))):
+                question, answer = data["input"][0][idx], data["output"][0][idx]
+                output_dic[accelerator.process_index]['id'].append(data["id"][0][idx])
+                output_dic[accelerator.process_index]['task'].append(data["task"][0][idx])
+                output_dic[accelerator.process_index]['input'].append(data["input"][0][idx])
+                output_dic[accelerator.process_index]['expected_output'].append(data["output"][0][idx])
                 input_ids = tokenizer(
                     question,
-                    return_tensors='pt'
+                    return_tensors='pt',
+                    truncation=True
                 ).input_ids.to(model.device)
 
                 combined_input_ids = tokenizer(
