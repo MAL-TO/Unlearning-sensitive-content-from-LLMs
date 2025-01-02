@@ -157,7 +157,7 @@ def cal_rouge_score(model,retain_data,forget_data,model_type,max_length=300):
   return pd.DataFrame({"regurgitation_score_rouge_1_retain":regurgitation_score_rouge_1_retain,"regurgitation_score_retain":regurgitation_score_retain,
                        "knowledge_score_retain":knowledge_score_retain,"regurgitation_score_rouge_1_forget":regurgitation_score_rouge_1_forget,
                        "regurgitation_score_forget":regurgitation_score_forget,
-                       "knowledge_score_retain":knowledge_score_forget})
+                       "knowledge_score_retain":knowledge_score_forget}) 
 
 
 

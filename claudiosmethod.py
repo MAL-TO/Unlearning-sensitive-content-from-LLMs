@@ -131,8 +131,53 @@ def newloss(pretrained_model, current_model,full_model,batch, device):
 
             loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean()
             tot_ce+=loss
-    return tot_kl,tot_ce 
+    return tot_kl,tot_ce
+ 
+def gradient_ascent(pretrained_model, current_model,full_model,batch, device):
+    """
+    Compute *forward* KL as the normal utility loss.
 
+    Args:
+        pretrained_model: reference model which is the pretrained (original) model.
+        current_model: The current unlearning model.
+        batch: A batch of normal data.
+        device: GPU device.
+
+    Returns:
+       The KL loss.
+    """
+    normal_outputs = current_model(
+        batch["input_ids"].to(device),
+        attention_mask=batch["attention_mask"].to(device),
+        labels=batch["labels"].to(device),
+    )
+
+    with torch.no_grad():
+        pretrained_outputs = pretrained_model(
+            batch["input_ids"].to(device),
+            attention_mask=batch["attention_mask"].to(device),
+            labels=batch["labels"].to(device),
+        )
+    with torch.no_grad():
+        full_model_outputs = full_model(
+            batch["input_ids"].to(device),
+            attention_mask=batch["attention_mask"].to(device),
+            labels=batch["labels"].to(device),
+        )
+
+    # P: pretrained model; Q: current model.
+    l=torch.unsqueeze(batch["split"],-1)
+    l=torch.unsqueeze(l,-1).to(device)
+    prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
+    prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
+    prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
+
+    out_teacher= (1-l)*cross_entropy() - l*cross_entropy()
+
+
+    loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean() 
+
+    return loss
 
 
 
@@ -147,7 +192,7 @@ def newloss(pretrained_model, current_model,full_model,batch, device):
 
 
     
-def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,epoch,device,optimizer,project_name,config):
+def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,epoch,device,optimizer,project_name,config,tokenizer):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -172,6 +217,8 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     # track hyperparameters and run metadata
     config=config
 )
+  pretrainedmodel.eval()
+  fullmodel.eval()
   unlearnmodel.to(device) ##student
   pretrainedmodel.to(device) #orginal OLBO 1B for forget set (bad teacher)
   fullmodel.to(device) #challenge's pre trained model for retain set (good teacher)
@@ -196,6 +243,9 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
         elif config["loss"]=="mix2":
             kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
             loss=config["alpha"]*kl+config["gamma"]*ce
+            wandb.log({"Loss":loss.item()})
+        elif config["loss"]=="ga":
+            loss=gradient_ascent(fullmodel,unlearnmodel,fullmodel,batch,device)
             wandb.log({"Loss":loss.item()})
 
         
@@ -224,11 +274,17 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
                 kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
                 val_loss=config["alpha"]*kl+config["gamma"]*ce
                 wandb.log({"Val Loss":loss.item()})
+            elif config["loss"]=="ga":
+                val_loss=gradient_ascent(fullmodel,unlearnmodel,fullmodel,batch,device)
+                wandb.log({"Val Loss":loss.item()})
+
             
             
             print(f"Batch Val Loss : {val_loss.item()}")
             total_val_loss+=val_loss.item()
     print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
+    unlearnmodel.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
+    tokenizer.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
 
   
 

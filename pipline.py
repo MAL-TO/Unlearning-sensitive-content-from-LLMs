@@ -13,7 +13,11 @@ def main():
     # Initialize configuration
     with open('config.json', 'r') as file:
         config = json.load(file)
-    model=model_loader(config["model_type"])
+    if config['extra_model']=='true':
+        model = AutoModelForCausalLM.from_pretrained(config["model_path"])
+        print("Model is loaded")
+    else:
+        model=model_loader(config["model_type"])
     full_model=model_loader(config["model_type"])
     if config["optimizer"]=="adam":
         optimizer=torch.optim.Adam(model.parameters(),lr=config["lr"])
@@ -65,15 +69,8 @@ def main():
         train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
         original_model = AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf")
 
-        if config['extra_model']=='true':
-            model.load_state_dict(torch.load(config["model_path"],weights_only=True))
-            print("Model is loaded")
-
         
-        final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
-        final_model.save_pretrained(config["file_name"])
-        tokenizer.save_pretrained(config["file_name"])
-
+        final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config,tokenizer)
 
 
 
