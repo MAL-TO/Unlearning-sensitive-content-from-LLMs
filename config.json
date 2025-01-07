@@ -1,0 +1,19 @@
+{
+    "train_type":"cl",
+    "lr":0.0000002,
+    "optimizer":"sgd",
+    "model_type":"1B",
+    "epochs":1,
+    "device":"cuda",
+    "alpha":1
+    ,
+    "gamma":1,
+    "batch_size":2,
+    "project_name":"claudio",
+    "file_name":"claudio_kl",
+    "task_type":"All",
+    "train_type_data":"All",
+    "extra_model":"false",
+    "model_path":"/home/amunis/Unlearning-sensitive-content-from-LLMs/claudio_forget1.pth",
+    "loss":"kl"
+}
