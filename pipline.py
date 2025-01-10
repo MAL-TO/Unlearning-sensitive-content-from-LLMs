@@ -18,16 +18,24 @@ def main():
         print("Model is loaded")
     else:
         model=model_loader(config["model_type"])
-    full_model=model_loader(config["model_type"])
+    good_teacher=model_loader(config["model_type"])
     if config["optimizer"]=="adam":
         optimizer=torch.optim.Adam(model.parameters(),lr=config["lr"])
     elif config["optimizer"]=="sgd":
         optimizer=torch.optim.SGD(model.parameters(),lr=config["lr"])
     elif config["optimizer"]=="adamw":
         optimizer=torch.optim.AdamW(model.parameters(),lr=config["lr"])
+    if config["model_type"]=="7B":
+        path = "/data1/malto/unlearning_llm/"
+        good_teacher_path = path + 'models/semeval25-unlearning-model'
+    else:
+        path = "/data1/malto/unlearning_llm/"
+        good_teacher_path = path + 'models/semeval25-unlearning-model'+'-1B-model'
     if config["train_type"]=="gtbt":
         config_manager = ConfigManager()
         config = config_manager.config
+
+
     
     # Initialize components
         model_manager = ModelManager(config)
@@ -58,7 +66,7 @@ def main():
         unlearning.save_checkpoint("final_checkpoint.pt")
         config_manager.save_config("config.json")
     elif config["train_type"]=="gd":
-        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
+        train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"],good_teacher_path,config["device"])
 
         final_model=GradientDifferenceTrainLoop(model,train_set,val_set,config["epochs"],config["device"]
                                             ,optimizer,config["project_name"],config)
@@ -67,10 +75,9 @@ def main():
 
     elif config["train_type"]=="cl":
         train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
-        original_model = AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf")
 
         
-        final_model=ClaudioTrainLoop(model,full_model,original_model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config,tokenizer)
+        final_model=ClaudioTrainLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
 
 
 

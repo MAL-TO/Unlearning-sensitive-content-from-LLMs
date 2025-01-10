@@ -6,13 +6,23 @@ from transformers import AutoTokenizer,AutoModelForCausalLM
 from evaluate_generations import rouge_scorer
 scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
 import pandas as pd
+from tqdm import tqdm
+
 
 def load_token():
     path = "/data1/malto/unlearning_llm/token.txt"
     with open(path, 'r') as f:
         return f.read().strip()
 
-
+def get_teacher_answer(teacher,data,device):
+   teacher.eval()
+   with torch.no_grad():
+        pretrained_outputs = teacher(
+            data["input_ids"].to(device),
+            attention_mask=data["attention_mask"].to(device),
+            labels=data["labels"].to(device),
+        )
+   return pretrained_outputs.logits.squeeze(0).to("cpu")
 
 class UnlearningDataset(torch.utils.data.Dataset):
     def __init__(self, model_type, data):
@@ -21,9 +31,14 @@ class UnlearningDataset(torch.utils.data.Dataset):
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
         elif model_type == "1B":
             self.tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
+        
 
         # Tokenize the input and output with padding and truncation    
         self.data=data
+    
+
+        
+           
 
     def __len__(self):
         return len(self.data)
@@ -35,13 +50,16 @@ class UnlearningDataset(torch.utils.data.Dataset):
         attention_mask = prompt["attention_mask"]
         start_locs=self.tokenizer(self.data.iloc[index]["input"])
 
+
         return {
             "input_ids": torch.tensor(prompt["input_ids"]),
             "attention_mask": torch.tensor(attention_mask),
             "start_locs":len(start_locs["input_ids"])-1,
             "labels": torch.tensor(labels["input_ids"]),
-            "split":1 if self.data.iloc[index]["split"]=="forget" else 0
+            "split":1 if self.data.iloc[index]["split"]=="forget" else 0,
+
         }
+    
 def compute_meanloss(val_set,criterion,model,device):
   mean_loss=0
   with torch.no_grad():
@@ -78,6 +96,21 @@ def prepare_data(model_type,batch_size,task_type,train_type):
      retain_validation_df=retain_validation_df[retain_validation_df["task"]=="Task3"]
      forget_train_df=forget_train_df[forget_train_df["task"]=="Task3"]
      forget_validation_df=forget_validation_df[forget_validation_df["task"]=="Task3"]
+  elif task_type=="Task12":
+      retain_train_df=retain_train_df[(retain_train_df["task"]=="Task2") | (retain_train_df["task"]=="Task1")]
+      print(retain_train_df[retain_train_df["task"]=="Task3"])
+      retain_validation_df=retain_validation_df[(retain_validation_df["task"]=="Task2") | (retain_validation_df["task"]=="Task1")]
+      print(retain_validation_df[retain_validation_df["task"]=="Task3"])
+      forget_train_df=forget_train_df[(forget_train_df["task"]=="Task2") | (forget_train_df["task"]=="Task1")]
+      print(forget_train_df[forget_train_df["task"]=="Task3"])
+      forget_validation_df=forget_validation_df[(forget_validation_df["task"]=="Task2") | (forget_validation_df["task"]=="Task1")]
+      print(forget_validation_df[forget_validation_df["task"]=="Task3"])
+  elif task_type=="Task12_f3":
+      print(retain_validation_df[retain_validation_df["task"]=="Task3"])
+      forget_train_df=forget_train_df[(forget_train_df["task"]=="Task3")]
+      print(forget_train_df[forget_train_df["task"]=="Task3"])
+      forget_validation_df=forget_validation_df[(forget_validation_df["task"]=="Task3")]
+      print(forget_validation_df[forget_validation_df["task"]=="Task3"])
      
   if train_type.lower()=="retain":
     train=UnlearningDataset(model_type,retain_train_df)

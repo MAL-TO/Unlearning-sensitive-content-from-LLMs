@@ -22,7 +22,7 @@ from sklearn.metrics import roc_curve, auc
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 
 def mia_attacks(args, model, tokenizer):
-    mia_data_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/new_evaluation/mia_test2/'
+    mia_data_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/final_evaluation/mia_data/'
     member_file =  mia_data_path+ 'member.jsonl'
     nonmember_file = mia_data_path + 'nonmember.jsonl'
     losses = []
@@ -87,7 +87,7 @@ def main():
     torch.manual_seed(42)
     np.random.seed(42)
 
-    checkpoint_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/claudio_ce_epoch_3'
+    checkpoint_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/together_lr1e4_epoch_2_ft3_epoch_1'
 
     # Set up accelerator
     accelerator = Accelerator()

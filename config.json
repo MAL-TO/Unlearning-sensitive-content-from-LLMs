@@ -1,6 +1,6 @@
 {
     "train_type":"cl",
-    "lr":0.0000002,
+    "lr":0.0001,
     "optimizer":"sgd",
     "model_type":"1B",
     "epochs":1,
@@ -8,12 +8,12 @@
     "alpha":1
     ,
     "gamma":1,
-    "batch_size":2,
+    "batch_size":4,
     "project_name":"claudio",
-    "file_name":"claudio_kl",
+    "file_name":"togethe",
     "task_type":"All",
     "train_type_data":"All",
     "extra_model":"false",
-    "model_path":"/home/amunis/Unlearning-sensitive-content-from-LLMs/claudio_forget1.pth",
-    "loss":"kl"
+    "model_path":"/home/amunis/Unlearning-sensitive-content-from-LLMs/together_lr1e4_epoch_2",
+    "loss":"ce"
 }

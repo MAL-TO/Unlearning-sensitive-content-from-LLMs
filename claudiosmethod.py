@@ -5,7 +5,7 @@ import numpy as np
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
 tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
-def cross_entropy(pretrained_model, current_model,full_model,batch, device):
+def cross_entropy(current_model,good_teacher,batch, device):
     """
     Compute *forward* KL as the normal utility loss.
 
@@ -23,60 +23,50 @@ def cross_entropy(pretrained_model, current_model,full_model,batch, device):
         attention_mask=batch["attention_mask"].to(device),
         labels=batch["labels"].to(device),
     )
-
     with torch.no_grad():
-        pretrained_outputs = pretrained_model(
+        good_teacher_outputs = good_teacher(
             batch["input_ids"].to(device),
             attention_mask=batch["attention_mask"].to(device),
             labels=batch["labels"].to(device),
         )
-    with torch.no_grad():
-        full_model_outputs = full_model(
-            batch["input_ids"].to(device),
-            attention_mask=batch["attention_mask"].to(device),
-            labels=batch["labels"].to(device),
-        )
-
     # P: pretrained model; Q: current model.
     l=torch.unsqueeze(batch["split"],-1)
-    l=torch.unsqueeze(l,-1).to(device)
-    prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
-    prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
+    l=torch.unsqueeze(l,-1)
+    bad_teacher=torch.normal(mean = 0, 
+                                    std = 1, 
+                                    size = good_teacher_outputs.logits.shape).cuda() + torch.ones(good_teacher_outputs.logits.shape[-1]).cuda()
+    prob_p = torch.nn.functional.softmax(bad_teacher.to(device), -1)
+    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits, -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-    out_teacher= (1-l)*prob_f + l*prob_p
+    out_teacher= (1-l.to(device))*prob_f + l.to(device)*prob_p
 
 
     loss = -(out_teacher * torch.log(prob_q + 1e-12)).sum(-1).mean() 
 
     return loss
 
-def kl_divergence(pretrained_model, current_model, full_model,batch, device):
+def kl_divergence(current_model,good_teacher,batch, device):
     normal_outputs = current_model(
         batch["input_ids"].to(device),
         attention_mask=batch["attention_mask"].to(device),
         labels=batch["labels"].to(device),
     )
-
     with torch.no_grad():
-        pretrained_outputs = pretrained_model(
+        good_teacher_outputs = good_teacher(
             batch["input_ids"].to(device),
             attention_mask=batch["attention_mask"].to(device),
             labels=batch["labels"].to(device),
         )
-    with torch.no_grad():
-        full_model_outputs = full_model(
-            batch["input_ids"].to(device),
-            attention_mask=batch["attention_mask"].to(device),
-            labels=batch["labels"].to(device),
-        )
+    # P: pretrained model; Q: current model.
     l=torch.unsqueeze(batch["split"],-1)
-    l=torch.unsqueeze(l,-1).to(device)
-    prob_p = torch.nn.functional.softmax(pretrained_outputs.logits, -1)
-    prob_f = torch.nn.functional.softmax(full_model_outputs.logits, -1)
+    l=torch.unsqueeze(l,-1)
+
+    prob_p = torch.nn.functional.softmax(torch.randn(512, 50304), -1)
+    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits.to(device), -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-    out_teacher= (1-l)*prob_f + l*prob_p
+    out_teacher= (1-l.to(device))*prob_f + l.to(device)*prob_p
 
 
     loss = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
@@ -193,7 +183,7 @@ def gradient_ascent(pretrained_model, current_model,full_model,batch, device):
 
 
     
-def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,epoch,device,optimizer,project_name,config,tokenizer):
+def ClaudioTrainLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,optimizer,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -218,12 +208,16 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     # track hyperparameters and run metadata
     config=config
 )
-  pretrainedmodel.eval()
-  fullmodel.eval()
+  if config["model_type"]=="1B":
+      tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
+  elif config["model_type"]=="7B":
+      tokenizer=AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
+
   unlearnmodel.to(device) ##student
-  pretrainedmodel.to(device) #orginal OLBO 1B for forget set (bad teacher)
-  fullmodel.to(device) #challenge's pre trained model for retain set (good teacher)
+#challenge's pre trained model for retain set (good teacher)
   unlearnmodel.train()
+  good_teacher.eval()
+  good_teacher.to(device)
   for forget_epoch in range(epoch):
 
     epoch_loss=0
@@ -231,22 +225,22 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     for batch in train_set:
         optimizer.zero_grad()
         if config["loss"]=="kl":
-           loss=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+           loss=kl_divergence(unlearnmodel,good_teacher,batch,device)
            wandb.log({"Loss":loss.item()})
         elif config["loss"]=="ce":
-           loss=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+           loss=cross_entropy(unlearnmodel,good_teacher,batch,device)
            wandb.log({"Loss":loss.item()})
         elif config["loss"]=="mix":
-            loss1=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
-            loss2=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+            loss1=kl_divergence(unlearnmodel,good_teacher,batch,device)
+            loss2=cross_entropy(unlearnmodel,batch,device)
             loss=config["alpha"]*loss1+config["gamma"]*loss2
             wandb.log({"Loss":loss.item()})
         elif config["loss"]=="mix2":
-            kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+            kl,ce=newloss(unlearnmodel,batch,device)
             loss=config["alpha"]*kl+config["gamma"]*ce
             wandb.log({"Loss":loss.item()})
         elif config["loss"]=="ga":
-            loss=gradient_ascent(fullmodel,unlearnmodel,fullmodel,batch,device)
+            loss=gradient_ascent(unlearnmodel,batch,device)
             wandb.log({"Loss":loss.item()})
 
         
@@ -261,29 +255,26 @@ def ClaudioTrainLoop(unlearnmodel,fullmodel,pretrainedmodel,train_set,val_set,ep
     with torch.no_grad():
         for batch in val_set:
             if config["loss"]=="kl":
-                val_loss=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                val_loss=kl_divergence(unlearnmodel,good_teacher,batch,device)
                 wandb.log({"Val Loss":val_loss.item()})
             elif config["loss"]=="ce":
-                val_loss=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                val_loss=cross_entropy(unlearnmodel,good_teacher,batch,device)
                 wandb.log({"Val Loss":val_loss.item()})
             elif config["loss"]=="mix":
-                loss1=kl_divergence(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
-                loss2=cross_entropy(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                loss1=kl_divergence(unlearnmodel,batch,device)
+                loss2=cross_entropy(unlearnmodel,batch,device)
                 val_loss=config["alpha"]*loss1+config["gamma"]*loss2
                 wandb.log({"Val Loss":loss.item()})
             elif config["loss"]=="mix2":
-                kl,ce=newloss(pretrainedmodel,unlearnmodel,fullmodel,batch,device)
+                kl,ce=newloss(unlearnmodel,batch,device)
                 val_loss=config["alpha"]*kl+config["gamma"]*ce
-                wandb.log({"Val Loss":loss.item()})
-            elif config["loss"]=="ga":
-                val_loss=gradient_ascent(fullmodel,unlearnmodel,fullmodel,batch,device)
                 wandb.log({"Val Loss":loss.item()})
 
             
             
             print(f"Batch Val Loss : {val_loss.item()}")
             total_val_loss+=val_loss.item()
-    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
+    print(f"Epoch {forget_epoch+1}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
     unlearnmodel.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
     tokenizer.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
 
