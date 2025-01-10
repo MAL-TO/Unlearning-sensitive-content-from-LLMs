@@ -4,7 +4,6 @@ import wandb
 import numpy as np
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
-tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
 def cross_entropy(current_model,good_teacher,batch, device):
     """
     Compute *forward* KL as the normal utility loss.
