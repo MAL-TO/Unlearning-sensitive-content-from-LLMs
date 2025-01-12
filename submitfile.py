@@ -85,7 +85,6 @@ def unlearning(model_path,output_path,retain_path,forget_path):
             optimizer.zero_grad()
             
             loss=kl_divergence(unlearn_model,good_teacher,batch,device)
-            print(f"Batch Loss:{loss.item()}")
             loss.backward()
             optimizer.step()
     unlearn_model.save_pretrained(output_path) 
