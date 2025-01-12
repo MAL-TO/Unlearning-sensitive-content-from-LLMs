@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 from transformers import AutoTokenizer,AutoModelForCausalLM
-
+import os
 def unlearning(model_path,output_path,forget_path,retain_path):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
@@ -38,8 +38,8 @@ def unlearning(model_path,output_path,forget_path,retain_path):
 
             }
     #Preparing data
-    retain_df = pd.read_parquet(f"{retain_path}/retain.parquet", engine='pyarrow') 
-    forget_df = pd.read_parquet(f"{forget_path}/forget.parquet", engine='pyarrow') 
+    retain_df = pd.read_parquet(os.path.join(retain_path,"retain.parquet"), engine='pyarrow') 
+    forget_df = pd.read_parquet(os.path.join(forget_path,"forget.parquet"), engine='pyarrow') 
     train_data=pd.concat([retain_df,forget_df],ignore_index=True)
     dataset=UnlearningDataset(tokenizer,train_data)
     dataloader=torch.utils.data.DataLoader(dataset,batch_size=4,shuffle=True) 
@@ -89,4 +89,6 @@ def unlearning(model_path,output_path,forget_path,retain_path):
             optimizer.step()
     unlearn_model.save_pretrained(output_path) 
     tokenizer.save_pretrained(output_path)
+
+
 
