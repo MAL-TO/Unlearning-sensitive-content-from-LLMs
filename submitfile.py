@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
-def unlearning(model_path,output_path,retain_path,forget_path):
+def unlearning(model_path,output_path,forget_path,retain_path):
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     class UnlearningDataset(torch.utils.data.Dataset):
