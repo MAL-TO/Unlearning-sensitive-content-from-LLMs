@@ -60,9 +60,11 @@ def kl_divergence(current_model,good_teacher,batch, device):
     # P: pretrained model; Q: current model.
     l=torch.unsqueeze(batch["split"],-1)
     l=torch.unsqueeze(l,-1)
-
-    prob_p = torch.nn.functional.softmax(torch.randn(512, 50304), -1)
-    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits.to(device), -1)
+    bad_teacher=torch.normal(mean = 0, 
+                                    std = 1, 
+                                    size = good_teacher_outputs.logits.shape).cuda() + torch.ones(good_teacher_outputs.logits.shape[-1]).cuda()
+    prob_p = torch.nn.functional.softmax(bad_teacher.to(device), -1)
+    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits, -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
     out_teacher= (1-l.to(device))*prob_f + l.to(device)*prob_p

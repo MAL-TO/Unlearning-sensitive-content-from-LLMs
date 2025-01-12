@@ -1,0 +1,7 @@
+transformers
+datasets
+accelerate
+deepspeed
+pandas
+rouge_score
+tqdm

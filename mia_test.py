@@ -87,7 +87,7 @@ def main():
     torch.manual_seed(42)
     np.random.seed(42)
 
-    checkpoint_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/together_lr1e4_epoch_2_ft3_epoch_1'
+    checkpoint_path = '/home/amunis/Unlearning-sensitive-content-from-LLMs/together_kl_lr1e4_epoch_6'
 
     # Set up accelerator
     accelerator = Accelerator()

@@ -1,19 +1,19 @@
 {
     "train_type":"cl",
     "lr":0.0001,
-    "optimizer":"sgd",
+    "optimizer":"adam",
     "model_type":"1B",
-    "epochs":1,
+    "epochs":5,
     "device":"cuda",
     "alpha":1
     ,
     "gamma":1,
-    "batch_size":4,
+    "batch_size":1,
     "project_name":"claudio",
-    "file_name":"togethe",
+    "file_name":"together_kl_lr1e4_adam",
     "task_type":"All",
     "train_type_data":"All",
     "extra_model":"false",
     "model_path":"/home/amunis/Unlearning-sensitive-content-from-LLMs/together_lr1e4_epoch_2",
-    "loss":"ce"
+    "loss":"kl"
 }
