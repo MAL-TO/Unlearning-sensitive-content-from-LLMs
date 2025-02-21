@@ -38,14 +38,14 @@ def unlearning(model_path,output_path,forget_path,retain_path):
 
             }
     #Preparing data
-    retain_df = pd.read_parquet(os.path.join(retain_path,"retain.parquet"), engine='pyarrow') 
-    forget_df = pd.read_parquet(os.path.join(forget_path,"forget.parquet"), engine='pyarrow') 
+    retain_df = pd.read_parquet(retain_path, engine='pyarrow') 
+    forget_df = pd.read_parquet(forget_path, engine='pyarrow') 
     train_data=pd.concat([retain_df,forget_df],ignore_index=True)
     dataset=UnlearningDataset(tokenizer,train_data)
     dataloader=torch.utils.data.DataLoader(dataset,batch_size=4,shuffle=True) 
     unlearn_model=AutoModelForCausalLM.from_pretrained(model_path)
     good_teacher=AutoModelForCausalLM.from_pretrained(model_path)
-    optimizer=torch.optim.SGD(unlearn_model.parameters(),lr=0.0001)
+    optimizer=torch.optim.SGD(unlearn_model.parameters(),lr=0.001)
     device="cuda" if torch.cuda.is_available() else "cpu"
     def kl_divergence(current_model,good_teacher,batch, device):
         normal_outputs = current_model(
@@ -85,10 +85,24 @@ def unlearning(model_path,output_path,forget_path,retain_path):
             optimizer.zero_grad()
             
             loss=kl_divergence(unlearn_model,good_teacher,batch,device)
+            print(f"Batch Loss:{loss.item()}")
             loss.backward()
             optimizer.step()
+        print("First Epoch is finsihed")
     unlearn_model.save_pretrained(output_path) 
     tokenizer.save_pretrained(output_path)
 
 
 
+def main():
+    path = "/data1/malto/unlearning_llm/"
+    model_path = path + 'models/semeval25-unlearning-model'
+    dataset_path = path + 'datasets/semeval25-unlearning-data/'
+    retain_path=dataset_path+'data/retain_train-00000-of-00001.parquet'
+    forget_path=dataset_path+'data/forget_train-00000-of-00001.parquet'
+    model_path="/home/amunis/Unlearning-sensitive-content-from-LLMs/preunleran_1b"
+    output_path='/home/amunis/Unlearning-sensitive-content-from-LLMs/submit_test_10e3'
+    unlearning(model_path,output_path,forget_path,retain_path)
+
+if __name__=="__main__":
+    main()
