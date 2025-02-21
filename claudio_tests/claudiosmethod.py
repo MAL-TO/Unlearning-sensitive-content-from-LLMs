@@ -74,6 +74,8 @@ def ClaudioTrainLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,op
       tokenizer=AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
   if config["bad_teacher"]!="random":
       bad_teacher_model=AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B")
+      bad_teacher_model.to(device)
+      bad_teacher_model.eval()
   else:
       bad_teacher_model=None
 
