@@ -73,7 +73,7 @@ def scheduler_step(alpha, step_size, factor=0.1):
         return max(alpha * factor, 0.01)  # Ensure alpha doesn't go to zero
     return alpha
 def prepare_data(model_type,batch_size,task_type,train_type):
-  path = "/data1/malto/unlearning_llm/"
+  path = "/data3/csavelli/unlearning_llm/"
    ## Fetch and load dataset:
   dataset_path = path + 'datasets/semeval25-unlearning-data/'
   #snapshot_download(repo_id='llmunlearningsemeval2025organization/semeval25-unlearning-dataset-public', token=hf_token, local_dir=dataset_path, repo_type="dataset")
@@ -135,7 +135,7 @@ def prepare_data(model_type,batch_size,task_type,train_type):
 
      
 def model_loader(model_type):
-   path = "/data1/malto/unlearning_llm/"
+   path = "/data3/csavelli/unlearning_llm/"
    model_path = path + 'models/semeval25-unlearning-model'
    if model_type=="7B":
       
