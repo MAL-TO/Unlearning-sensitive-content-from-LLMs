@@ -5,35 +5,18 @@ import numpy as np
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
 
-def kl_minimization(current_model,good_teacher,batch, device):
+def gradient_ascent(current_model,batch, device):
     normal_outputs = current_model(
         batch["input_ids"].to(device),
         attention_mask=batch["attention_mask"].to(device),
         labels=batch["labels"].to(device),
     )
-    with torch.no_grad():
-        good_teacher_outputs = good_teacher(
-            batch["input_ids"].to(device),
-            attention_mask=batch["attention_mask"].to(device),
-            labels=batch["labels"].to(device),
-        )
-        
-    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits, -1)
-    prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
-
-    l=torch.unsqueeze(batch["split"],-1)
-    l=torch.unsqueeze(l,-1)
-    out_teacher=prob_f
-    
-
-    loss_kl = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
     ce=torch.nn.CrossEntropyLoss()
     loss_ce=ce(normal_outputs,batch["labels"].to(device))
-    loss=(1-l.to(device))*loss_kl - l.to(device)*loss_ce.item()
-    return loss
+    return -loss_ce
  
 
-def KlMinTrainingLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,optimizer,project_name,config):
+def GATrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -67,15 +50,13 @@ def KlMinTrainingLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,o
   unlearnmodel.to(device) ##student
 #challenge's pre trained model for retain set (good teacher)
   unlearnmodel.train()
-  good_teacher.eval()
-  good_teacher.to(device)
   for forget_epoch in range(epoch):
 
     epoch_loss=0
     batch_no=1
     for batch in train_set:
         optimizer.zero_grad()
-        loss=kl_minimization(unlearnmodel,good_teacher,batch,device)
+        loss=gradient_ascent(unlearnmodel,batch,device)
         wandb.log({"Loss":loss.item()})
 
         
@@ -89,7 +70,7 @@ def KlMinTrainingLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,o
     total_val_loss=0
     with torch.no_grad():
         for batch in val_set:
-            val_loss=kl_minimization(unlearnmodel,good_teacher,batch,device)
+            val_loss=gradient_ascent(unlearnmodel,batch,device)
             wandb.log({"Val Loss":val_loss.item()})
             
             

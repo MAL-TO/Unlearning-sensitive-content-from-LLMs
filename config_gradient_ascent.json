@@ -1,0 +1,16 @@
+    {
+        "lr":0.0001,
+        "optimizer":"adam",
+        "model_type":"1B",
+        "epochs":2,
+        "device":"cuda",
+        "batch_size":8,
+        "project_name":"claudio",
+        "file_name":"/data3/csavelli/unlearning_llm/models/config_random_order_1_epoch_2",
+        "task_type":"All",
+        "train_type_data":"forget",
+        "extra_model":"true",
+        "model_path":"/data3/csavelli/unlearning_llm/models/config_random_order_1",
+        "bad_teacher":"random",
+        "train_type":"ga"
+    }
