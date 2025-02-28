@@ -1,2 +1,2 @@
 # Unlearning-sensitive-content-from-LLMs
-MALTO Repository for the challenge Unlearning sensitive content from Large Language Models (https://llmunlearningsemeval2025.github.io/)
+Repository for the SemEval-2025 challenge "Task-4: Unlearning sensitive content from Large Language Models" (link: [https://helsinki-nlp.github.io/shroom/](https://llmunlearningsemeval2025.github.io/))
