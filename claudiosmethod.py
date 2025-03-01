@@ -31,8 +31,8 @@ def kl_divergence(current_model,good_teacher,batch, device,bt,bad_teacher_model)
                 attention_mask=batch["attention_mask"].to(device),
                 labels=batch["labels"].to(device),
             )
-        
-    prob_p = torch.nn.functional.softmax(bad_teacher.to(device), -1)
+    
+    prob_p = torch.nn.functional.softmax(bad_teacher.logits.to(device), -1)
     prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits, -1)
     prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
