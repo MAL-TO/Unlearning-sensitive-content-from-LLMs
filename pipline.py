@@ -6,6 +6,9 @@ import json
 from gradient_ascent import *
 from claudiosmethod import *
 import sys
+from kl_minimization import *
+from gradient_ascent2 import *
+from gradient_difference import *
 path = "/data3/csavelli/unlearning_llm/models/"
 
 
@@ -38,8 +41,17 @@ def main():
         good_teacher_path = path + 'models/semeval25-unlearning-model'+'-1B-model'
     train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
 
+    if config["training_type"]=="gtbt":
+        final_model=ClaudioTrainLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
+    elif config["train_type"]=="kl_min":
+        final_model=KlMinTrainingLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
+    elif config["train_type"]=="ga":
+        final_model=GATrainingLoop(model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
         
-    final_model=ClaudioTrainLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
+    elif config["train_type"]=="gd":
+        final_model=GDTrainingLoop(model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
+
+
 
 
 
