@@ -7,6 +7,7 @@ claudio_kl_1
 claudio_mix2_1
 claudio_gd_1
 claudio_forget_1
+*.sh
 
 *.pth
 claudio_forget1/model-00001-of-00002.safetensors
