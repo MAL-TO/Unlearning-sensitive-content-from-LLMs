@@ -5,21 +5,45 @@ import numpy as np
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
 
-def gradient_ascent(current_model,batch, device):
+def kl_divergence(current_model,good_teacher,batch, device,bt,bad_teacher_model):
     normal_outputs = current_model(
         batch["input_ids"].to(device),
         attention_mask=batch["attention_mask"].to(device),
         labels=batch["labels"].to(device),
     )
-    ce=torch.nn.CrossEntropyLoss()
-    loss_ce = ce(
-        normal_outputs.logits.view(-1, normal_outputs.logits.shape[-1]),  # Reshape logits
-        batch["labels"].view(-1).to(device)  # Reshape labels
-    )
-    return -loss_ce
- 
+    with torch.no_grad():
+        good_teacher_outputs = good_teacher(
+            batch["input_ids"].to(device),
+            attention_mask=batch["attention_mask"].to(device),
+            labels=batch["labels"].to(device),
+        )
+    # P: pretrained model; Q: current model.
+    l=torch.unsqueeze(batch["split"],-1)
+    l=torch.unsqueeze(l,-1)
+    if bt=="random":
+        bad_teacher=torch.normal(mean = 0, 
+                                    std = 1, 
+                                    size = good_teacher_outputs.logits.shape).cuda() + torch.ones(good_teacher_outputs.logits.shape[-1]).cuda()
+    else:
+        with torch.no_grad():
+            bad_teacher = bad_teacher_model(
+                batch["input_ids"].to(device),
+                attention_mask=batch["attention_mask"].to(device),
+                labels=batch["labels"].to(device),
+            )
+    
+    prob_p = torch.nn.functional.softmax(bad_teacher.logits.to(device), -1)
+    prob_f = torch.nn.functional.softmax(good_teacher_outputs.logits, -1)
+    prob_q = torch.nn.functional.softmax(normal_outputs.logits, -1)
 
-def GATrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project_name,config):
+    out_teacher= (1-l.to(device))*prob_f + l.to(device)*prob_p
+
+
+    loss = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
+
+
+    return loss  
+def DualTeacherTrainingLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,optimizer,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -49,17 +73,25 @@ def GATrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project
   elif config["model_type"]=="7B":
       tokenizer=AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
   print(config)
+  if config["bad_teacher"]!="random":
+      bad_teacher_model=AutoModelForCausalLM.from_pretrained("allenai/OLMo-1B-0724-hf", trust_remote_code=True)
+      bad_teacher_model.to(device)
+      bad_teacher_model.eval()
+  else:
+      bad_teacher_model=None
 
   unlearnmodel.to(device) ##student
 #challenge's pre trained model for retain set (good teacher)
   unlearnmodel.train()
+  good_teacher.eval()
+  good_teacher.to(device)
   for forget_epoch in range(epoch):
 
     epoch_loss=0
     batch_no=1
     for batch in train_set:
         optimizer.zero_grad()
-        loss=gradient_ascent(unlearnmodel,batch,device)
+        loss=kl_divergence(unlearnmodel,good_teacher,batch,device,config["bad_teacher"],bad_teacher_model)
         wandb.log({"Loss":loss.item()})
 
         
@@ -73,7 +105,7 @@ def GATrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project
     total_val_loss=0
     with torch.no_grad():
         for batch in val_set:
-            val_loss=gradient_ascent(unlearnmodel,batch,device)
+            val_loss=kl_divergence(unlearnmodel,good_teacher,batch,device,config["bad_teacher"],bad_teacher_model)
             wandb.log({"Val Loss":val_loss.item()})
             
             

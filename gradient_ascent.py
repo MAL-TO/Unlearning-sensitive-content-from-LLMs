@@ -4,61 +4,22 @@ import wandb
 import numpy as np
 from transformers import AutoTokenizer,AutoModelForCausalLM
 
-tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
-def get_answer_loss(operation, batch, model, device="cuda:0"):
-    """
-    Compute the loss on the answer (i.e. y) part.
 
-    Args:
-        operation: either "ga" (gradient ascent) or "gd" (gradient descent).
-        batch: A batch of data.
-        model: The unlearned model.
-        device: GPU device.
-
-    Returns:
-       The loss.
-    """
-    assert operation in ["ga", "gd"], "Operation must be either GA or GD."
-    input_ids, attention_mask, start_locs, labels = (
+def gradient_ascent(current_model,batch, device):
+    normal_outputs = current_model(
         batch["input_ids"].to(device),
-        batch["attention_mask"].to(device),
-        batch["start_locs"],
-        batch["labels"].to(device),
+        attention_mask=batch["attention_mask"].to(device),
+        labels=batch["labels"].to(device),
     )
-    outputs = model(input_ids, attention_mask=attention_mask)
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    # Shift one to predict next token.
-    shift_logits = outputs.logits[:, :-1, :]
-    shift_labels = labels[:, 1:]
-    losses = []
-    for bid in range(input_ids.shape[0]):
-        one_inp, one_st = input_ids[bid], start_locs[bid]
+    ce=torch.nn.CrossEntropyLoss()
+    loss_ce = ce(
+        normal_outputs.logits.view(-1, normal_outputs.logits.shape[-1]),  # Reshape logits
+        batch["labels"].view(-1).to(device)  # Reshape labels
+    )
+    return -loss_ce
+ 
 
-        # GA or GD.
-        position_loss = loss_fct(shift_logits[bid], shift_labels[bid])
-        if operation == "ga":  # Negative the direction for GA.
-            position_loss = -position_loss
-
-        # Simply put equal weights on all answers.
-        position_weight = torch.zeros_like(one_inp)
-        assert len(position_weight) == len(position_loss) + 1
-        position_weight[one_st:] = 1  # only focus on answer part
-
-        # Ignore the padding part.
-        if position_weight.sum() > 0:
-            position_weight = position_weight / position_weight.sum()
-
-        one_loss = (position_weight[:-1] * position_loss).sum()
-        losses.append(one_loss)
-    final_loss = torch.stack(losses).mean()
-
-    return final_loss
-
-
-
-
-    
-def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,project_name,config):
+def GATrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project_name,config):
   """
   Training Loop that uses gradient ascent algorithm
 
@@ -83,68 +44,45 @@ def GradientDifferenceTrainLoop(model,train_set,val_set,epoch,device,optimizer,p
     # track hyperparameters and run metadata
     config=config
 )
-  model.to(device)
-  model.train()
+  if config["model_type"]=="1B":
+      tokenizer = AutoTokenizer.from_pretrained("allenai/OLMo-1B-0724-hf")
+  elif config["model_type"]=="7B":
+      tokenizer=AutoTokenizer.from_pretrained("allenai/OLMo-7B-0724-Instruct-hf")
+  print(config)
+
+  unlearnmodel.to(device) ##student
+#challenge's pre trained model for retain set (good teacher)
+  unlearnmodel.train()
   for forget_epoch in range(epoch):
 
     epoch_loss=0
     batch_no=1
     for batch in train_set:
         optimizer.zero_grad()
-        if batch["split"]==1:
-          loss=get_answer_loss("ga",batch,model,device)
-        elif batch["split"]==0:
-          loss=get_answer_loss("gd",batch,model,device)
+        loss=gradient_ascent(unlearnmodel,batch,device)
+        wandb.log({"Loss":loss.item()})
+
+        
+        
 
         epoch_loss+=loss.item()
         loss.backward()
         optimizer.step()
-        print(f"Batch {batch_no} Loss:{loss.item()}")
-        wandb.log({"Batch Loss":loss.item()})
+        print(f"Batch {batch_no} Batch Type:{batch['split']} Loss:{loss.item()}")
         batch_no+=1
     total_val_loss=0
     with torch.no_grad():
         for batch in val_set:
-          if batch["split"]==1:
-            val_loss=get_answer_loss("ga",batch,model,device)
-          elif batch["split"]==0:
-            val_loss=get_answer_loss("gd",batch,model,device)
-          wandb.log({"Batch Val Loss":val_loss.item()})
-          print(f"Batch Val Loss : {val_loss.item()}")
-          total_val_loss+=val_loss.item()
-    print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
+            val_loss=gradient_ascent(unlearnmodel,batch,device)
+            wandb.log({"Val Loss":val_loss.item()})
+            
+            
+            print(f"Batch Val Loss : {val_loss.item()}")
+            total_val_loss+=val_loss.item()
+    print(f"Epoch {forget_epoch+1}, Train Loss: {epoch_loss/len(train_set)} Validation Loss: {total_val_loss/len(val_set):.4f}")
+    unlearnmodel.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
+    tokenizer.save_pretrained(f"{config["file_name"]}_epoch_{forget_epoch+1}")
 
   
 
-  return model
-def GradientAscentTrainingLoop(model,forget_set,val_forget_set,epoch,device,optimizer,project_name,config):
-    wandb.init(
-    # set the wandb project where this run will be logged
-    project=project_name,
-
-    # track hyperparameters and run metadata
-    config=config
-      )
-    for forget_epoch in range(epoch):
-      epoch_loss=0
-      batch_no=1
-      for forget in forget_set:
-        model.zero_grad()
-        loss=get_answer_loss("ga",forget,model,device)
-        
-        epoch_loss+=loss.item()
-        loss.backward()
-        optimizer.step()
-        print(f"Batch {batch_no} Loss:{loss.item()}")
-        wandb.log({"Batch Loss":loss.item()})
-        batch_no+=1
-      total_val_loss=0
-      with torch.no_grad():
-        for val_f in val_forget_set:
-              val_loss=get_answer_loss("ga",val_f,model,device)
-              wandb.log({"Batch Val Loss":val_loss.item()})
-              print(f"Batch Val Loss : {val_loss.item()}")
-              total_val_loss+=val_loss.item()
-      print(f"Epoch {forget_epoch}, Train Loss: {epoch_loss} Validation Loss: {total_val_loss:.4f}")
-    return model
-   
+  return unlearnmodel

@@ -1,13 +1,13 @@
-from good_bad_teacher import ConfigManager, DataManager, ModelManager, TeacherStudentUnlearning
+from ignore.good_bad_teacher import ConfigManager, DataManager, ModelManager, TeacherStudentUnlearning
 from utils import *
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import pandas as pd
 import json
-from gradient_ascent import *
-from claudiosmethod import *
+from ignore.gradient_ascent import *
+from dual_teacher import *
 import sys
 from kl_minimization import *
-from gradient_ascent2 import *
+from gradient_ascent import *
 from gradient_difference import *
 path = "/data3/csavelli/unlearning_llm/models/"
 
@@ -42,7 +42,7 @@ def main():
     train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
 
     if config["train_type"]=="gtbt":
-        final_model=ClaudioTrainLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
+        final_model=DualTeacherTrainingLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
     elif config["train_type"]=="kl":
         final_model=KlMinTrainingLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
     elif config["train_type"]=="ga":
