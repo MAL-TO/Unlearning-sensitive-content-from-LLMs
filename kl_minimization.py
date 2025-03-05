@@ -28,9 +28,12 @@ def kl_minimization(current_model,good_teacher,batch, device):
 
     loss_kl = (out_teacher * (torch.log(out_teacher + 1e-12) - torch.log(prob_q + 1e-12))).sum(-1).mean()
     ce=torch.nn.CrossEntropyLoss()
-    loss_ce=ce(normal_outputs,batch["labels"].to(device))
-    loss=(1-l.to(device))*loss_kl - l.to(device)*loss_ce.item()
-    return loss
+    loss_ce = ce(
+        normal_outputs.logits.view(-1, normal_outputs.logits.shape[-1]),  # Reshape logits
+        batch["labels"].view(-1).to(device)  # Reshape labels
+    )
+    loss=(1-l.to(device))*loss_kl - l.to(device)*loss_ce
+    return loss.sum(-1).mean()
  
 
 def KlMinTrainingLoop(unlearnmodel,good_teacher,train_set,val_set,epoch,device,optimizer,project_name,config):

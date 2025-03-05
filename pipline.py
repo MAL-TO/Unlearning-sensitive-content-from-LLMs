@@ -34,16 +34,16 @@ def main():
     elif config["optimizer"]=="adamw":
         optimizer=torch.optim.AdamW(model.parameters(),lr=config["lr"])
     if config["model_type"]=="7B":
-        path = "/data3/csavelli/unlearning_llm/models/"
+        path = "/data1/malto/unlearning_llm/"
         good_teacher_path = path + 'models/semeval25-unlearning-model'
     else:
-        path = "/data3/csavelli/unlearning_llm/models/"
+        path = "/data1/malto/unlearning_llm/"
         good_teacher_path = path + 'models/semeval25-unlearning-model'+'-1B-model'
     train_set,val_set=prepare_data(config["model_type"],config["batch_size"],config["task_type"],config["train_type_data"])
 
-    if config["training_type"]=="gtbt":
+    if config["train_type"]=="gtbt":
         final_model=ClaudioTrainLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
-    elif config["train_type"]=="kl_min":
+    elif config["train_type"]=="kl":
         final_model=KlMinTrainingLoop(model,good_teacher,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)
     elif config["train_type"]=="ga":
         final_model=GATrainingLoop(model,train_set,val_set,config["epochs"],config["device"],optimizer,config["project_name"],config)

@@ -12,7 +12,10 @@ def gradient_ascent(current_model,batch, device):
         labels=batch["labels"].to(device),
     )
     ce=torch.nn.CrossEntropyLoss()
-    loss_ce=ce(normal_outputs,batch["labels"].to(device))
+    loss_ce = ce(
+        normal_outputs.logits.view(-1, normal_outputs.logits.shape[-1]),  # Reshape logits
+        batch["labels"].view(-1).to(device)  # Reshape labels
+    )
     return -loss_ce
  
 

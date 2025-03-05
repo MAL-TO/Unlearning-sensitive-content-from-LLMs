@@ -12,11 +12,14 @@ def gradient_difference(current_model,batch, device):
         labels=batch["labels"].to(device),
     )
     ce=torch.nn.CrossEntropyLoss()
-    loss_ce=ce(normal_outputs,batch["labels"].to(device))
+    loss_ce = ce(
+        normal_outputs.logits.view(-1, normal_outputs.logits.shape[-1]),  # Reshape logits
+        batch["labels"].view(-1).to(device)  # Reshape labels
+    )
     l=torch.unsqueeze(batch["split"],-1)
     l=torch.unsqueeze(l,-1)
-    loss=(1-l.to(device))*loss_ce - l.to(device)*loss_ce.item()
-    return loss
+    loss=(1-l.to(device))*loss_ce - l.to(device)*loss_ce
+    return loss.sum(-1).mean()
  
 
 def GDTrainingLoop(unlearnmodel,train_set,val_set,epoch,device,optimizer,project_name,config):
